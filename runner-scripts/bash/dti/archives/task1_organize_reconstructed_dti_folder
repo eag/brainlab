@@ -1,0 +1,53 @@
+#!/bin/bash
+
+
+#-------------------------------------------------------------------------------
+# Setup
+#-------------------------------------------------------------------------------
+
+in_dir=/mnt/storage/datasets/leducq_dti/reconstructed
+out_dir=${HOME}/tmp/organized
+log_dir=${out_dir}/logs
+
+mkdir -p ${log_dir}
+log_fn=${log_dir}/renamed_files.csv
+rm ${log_fn}
+
+#-------------------------------------------------------------------------------
+# Functions
+#-------------------------------------------------------------------------------
+
+
+function organize_files()
+{
+  search_expr=$1
+  sfx=$2
+	for dir in $(cd ${in_dir}; ls -d B*); do
+	  bval=$(find ${in_dir}/${dir} -name *.bval)
+	  bvec=$(find ${in_dir}/${dir} -name *.bvec)
+	  niis=($(find ${in_dir}/${dir} -name *.nii.gz | sort))
+	  
+	  mkdir -p ${out_dir}/${dir}
+	  
+	  if [[ ${#niis[@]} -ne "2" ]]; then
+	    continue;
+	  fi
+	  cp ${niis[0]} ${out_dir}/${dir}/DTI_AP.nii.gz
+	  cp ${niis[1]} ${out_dir}/${dir}/DTI_PA.nii.gz
+	  cp ${bval} ${out_dir}/${dir}/DTI_AP.bval
+	  cp ${bvec} ${out_dir}/${dir}/DTI_AP.bvec
+	  	 
+	done
+
+}
+	
+#-------------------------------------------------------------------------------
+# Processing
+#-------------------------------------------------------------------------------
+
+organize_files "*DTI*" "DTI"
+
+
+#-------------------------------------------------------------------------------
+
+

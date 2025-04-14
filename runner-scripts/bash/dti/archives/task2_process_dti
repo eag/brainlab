@@ -1,0 +1,347 @@
+#!/bin/bash
+
+
+#-------------------------------------------------------------------------------
+# Setup
+#-------------------------------------------------------------------------------
+
+
+in_dir=${HOME}/tmp/organized
+out_dir=${in_dir}
+log_dir=${out_dir}/logs
+log_fn=${log_dir}/subject_list.txt
+
+b0_indices_fn=DTI_AP_b0_indices.txt 
+acqparams_fn=DTI_acqparams.txt
+topup_cfg_fn=/usr/local/fsl/etc/flirtsch/b02b0.cnf
+readout_time=0.0495301
+# note:
+#  readout time in "TotalReadoutTime" field is the effective total readout time
+#  and is derived from: "EffectiveEchoSpacing" * ("ReconMatrixPE - 1).
+#  0.000390001 * (128 - 1)
+
+export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
+export PATH=${PATH}:${ANTSPATH}
+
+#t1_dir=${HOME}/work/datasets/leducq/t1
+
+#export PATH=${PATH}:/${HOME}/work/code/external-tools/itksnap/c3d-1.1.0-Linux-x86_64/bin
+
+#-------------------------------------------------------------------------------
+# FUNCTIONS
+#-------------------------------------------------------------------------------
+
+function prep_dirs
+{
+  echo "preparing dirs"
+  mkdir -p ${log_dir}
+  $(cd ${in_dir}; ls -d B*  | grep -v "logs" > ${log_fn})
+}
+
+function process_dti
+{
+    
+  cd ${in_dir}/${sub_id}
+  
+  ## denoise (gradient info not used) ##
+  dwidenoise DTI_AP.nii.gz DTI_AP_denoise.nii.gz -nthreads 6 -force
+  
+  ## degibbs (gradient info not used) ##
+  mrdegibbs DTI_AP_denoise.nii.gz DTI_AP_denoise_degibbs.nii.gz -nthreads 6 -force
+  
+  ## write AP b0 indices to file ##
+  idx="0"; b0_ind=""
+  rm -f ${b0_indices_fn}
+  for i in $(cat DTI_AP.bval); do 
+    if [[ ${i}x == 0x ]]; then
+      echo ${idx} >> ${b0_indices_fn}
+    fi
+    idx=$((${idx}+1))
+  done
+  
+  ## extract 3 b0s from AP ##
+  for i in $(seq 1 3); do
+    roi_start=$(cat ${b0_indices_fn} | head -n${i} | tail -n1)
+    fslroi DTI_AP tmp${i} ${roi_start} 1
+  done
+
+  ## combine 3 AP and 3 PA b0 volumes into single image ##
+  fslmerge -t DTI_AP_PA_b0_123 tmp1 tmp2 tmp3 DTI_PA
+  rm tmp[123].*
+
+  ## degibbs ##
+  ## notes: ##
+    # not enough redundancy, particularly with different phase-encode #
+    # directions, for denoising to be useful, so just correcting gibbs artifact #   
+  mrdegibbs DTI_AP_PA_b0_123.nii.gz DTI_AP_PA_b0_123_degibbs.nii.gz -nthreads 6 -force 
+
+  ## ---------------------------------------------------------------------------
+  ## without MRTRIX3 dwifslpreproc wrapper ##
+    
+  ## write phase encode vectors to file ##
+  ## notes: ##
+    # PA 0 1 0 X #
+    # AP 0 -1 0 X #
+    # X = echo spacing (e.g. 0.96ms) * EPI factor (e.g. 128) #
+    # X = TotalReadoutTime (in json)
+    # visual check to confirm https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/topup/Faq #
+  #rm -f acqparams.txt
+  #for i in $(seq 1 3); do
+  #  echo "0 -1 0 ${readout_time}" >> ${acqparams_fn}
+  #done
+  #for i in $(seq 1 3); do
+  #  echo "0 1 0 ${readout_time}" >> ${acqparams_fn}
+  #done
+    
+  ## run topup ##
+  #topup \
+  #  --imain=DTI_AP_PA_b0_123_degibbs \
+  #  --datain=${acqparams_fn} \
+  #  --config=${topup_cfg_fn} \
+  #  --out=topup_results \
+  #  --iout=topup_hifi_b0
+
+  ## get brain mask ##
+  #bet topup_hifi_b0 topup_hifi_b0_bet -f 0.3
+  
+  ## write index file ##
+  #idx=""
+  #for i in $(seq 1 $(cat DTI_AP.bval | wc -w)); do 
+  #  idx+=" 1" 
+  #done
+  #echo ${idx} > index.txt
+  
+  ## run eddy ##
+  #eddy_openmp \
+  #  --imain=DTI_AP_denoise_degibbs \
+  #  --mask=topup_hifi_b0_bet \
+  #  --bvals=DTI_AP.bval \
+  #  --bvecs=DTI_AP.bvec \
+  #  --out=DTI_AP_denoise_degibbs_eddy \
+  #  --acqp=${acqparams_fn} \
+  #  --index=index.txt \
+  #  --data_is_shelled \
+  #  --topup=topup_results \
+  #  --repol \
+  # --slm=linear
+  ## ---------------------------------------------------------------------------
+
+  ## run eddy ##
+  dwifslpreproc \
+    DTI_AP_denoise_degibbs.nii.gz \
+    DTI_AP_denoise_degibbs_eddy.nii.gz \
+    -rpe_pair \
+    -pe_dir AP \
+    -se_epi DTI_AP_PA_b0_123_degibbs.nii.gz \
+    -readout_time ${readout_time} \
+    -align_seepi \
+    -fslgrad DTI_AP.bvec DTI_AP.bval \
+    -eddy_options "--data_is_shelled --repol --slm=linear " \
+    -topup_options "--iout=DTI_topup_hifi_b0 " \
+    -eddyqc_all eddy_out \
+    -nthreads 6 \
+    -nocleanup \
+    -force
+  
+  out_tmp_dir=$(ls -d dwifslpreproc-tmp-*)
+  cp ${out_tmp_dir}/DTI_topup_hifi_b0.nii.gz .
+  cp ${out_tmp_dir}/dwi_post_eddy.eddy_rotated_bvecs \
+    DTI_AP_denoise_degibbs_eddy.bvec
+  rm -rf ${out_tmp_dir}  
+    
+  ## ---------------------------------------------------------------------------
+  ## wrapped topup command that gets executed: ##
+  #topup \
+  #  --imain=topup_in.nii \
+  #  --datain=topup_datain.txt \
+  #  --out=field \
+  #  --fout=field_map.nii.gz \
+  #  --config=/usr/local/fsl/etc/flirtsch/b02b0.cnf 
+  #  --verbose \
+  #  --iout=DTI_topup_hifi_b0 
+
+  ## wrapped eddy command that gets exectuted: ##
+  #eddy_openmp \
+  #--imain=eddy_in.nii \
+  #--mask=eddy_mask.nii \
+  #--acqp=eddy_config.txt \
+  #--index=eddy_indices.txt \
+  #--bvecs=bvecs --bvals=bvals \
+  #--topup=field \
+  #--data_is_shelled --repol --slm=linear \
+  #--out=dwi_post_eddy \
+  #--verbose
+  ## ---------------------------------------------------------------------------
+
+  ## get mask ##
+  bet DTI_topup_hifi_b0 DTI_topup_hifi_b0_bet -f 0.3
+ 
+  ## dwibiascorrect ##
+  dwibiascorrect ants \
+    DTI_AP_denoise_degibbs_eddy.nii.gz \
+    DTI_AP_denoise_degibbs_eddy_n4.nii.gz \
+    -bias DTI_AP_denoise_degibbs_eddy_n4_bias.nii.gz \
+    -fslgrad DTI_AP_denoise_degibbs_eddy.bvec DTI_AP.bval  \
+    -mask DTI_topup_hifi_b0_bet.nii.gz \
+    -nthreads 6 \
+    -force
+  
+  ## fit tensors ##
+  dtifit \
+    --data=DTI_AP_denoise_degibbs_eddy_n4 \
+    --out=DTI_tf \
+    --mask=DTI_topup_hifi_b0_bet \
+    --bvecs=DTI_AP_denoise_degibbs_eddy.bvec \
+    --bvals=DTI_AP.bval
+  
+
+  ## upsampling ##
+  #mrgrid DTI_AP_denoise_degibbs_eddy_n4.nii.gz \
+  #  regrid -voxel 1 DTI_AP_denoise_degibbs_eddy_n4_1mm.nii.gz \
+  #  -interp sinc -force
+  
+  #mrgrid DTI_topup_hifi_b0_bet.nii.gz \
+  #  regrid -voxel 1 DTI_topup_hifi_b0_bet_1mm.nii.gz \
+  #  -interp nearest -force
+  
+  ## fit tensors ##
+  #dtifit \
+  #  --data=DTI_AP_denoise_degibbs_eddy_n4_1mm \
+  #  --out=DTI_1mm_tf \
+  #  --mask=DTI_topup_hifi_b0_bet_1mm \
+  #  --bvecs=DTI_AP_denoise_degibbs_eddy.bvec \
+  #  --bvals=DTI_AP.bval
+      
+  #dtifit \
+  #  --data=DTI_AP \
+  #  --out=junk \
+  #  --mask=DTI_topup_hifi_b0_bet \
+  #  --bvecs=DTI_AP.bvec \
+  #  --bvals=DTI_AP.bval
+    
+  ## fixel-based analysis ##
+  # dwi2response dhollander
+  
+  rm -rf eddy_out
+}
+
+function coreg_t1_and_dti
+{
+  t1=${t1_dir}/${sub_id}/T1_masked_n4.nii.gz
+  
+  cd ${in_dir}/${sub_id}
+    
+  antsRegistrationSyN.sh -d 3 \
+    -m ${t1} \
+    -f DTI_1mm_tf_FA.nii.gz \
+    -o T1_to_DTI_ \
+    -n 8
+  
+  ## Note: ANTs BSpline interpolation not implemented, linear only option ##
+  #WarpImageMultiTransform 3 \
+  #  ${t1} \
+  #  DTI_to_T1_InverseWarped_nn.nii.gz \
+  #  -R DTI_1mm_tf_FA.nii.gz \
+  #   --use-BSpline \
+  #  -i DTI_to_T1_0GenericAffine.mat \
+  #  DTI_to_T1_1InverseWarp.nii.gz 
+  
+  ## So.... convert affine and warp to FSL format and reslice in FSL ##
+  ## affine ##
+  c3d_affine_tool \
+    -ref DTI_1mm_tf_FA.nii.gz \
+    -src ${t1} \
+    -itk T1_to_DTI_0GenericAffine.mat \
+    -ras2fsl -o T1_to_DTI_fsl_affine.omat 
+  
+  ## warp ##
+  wb_command -convert-warpfield \
+    -from-itk T1_to_DTI_1Warp.nii.gz \
+    -to-fnirt T1_to_DTI_fsl_1Warp.nii.gz \
+    DTI_1mm_tf_FA.nii.gz
+    
+  convertwarp --ref=DTI_1mm_tf_FA.nii.gz \
+    --premat=T1_to_DTI_fsl_affine.omat \
+    --warp1=T1_to_DTI_fsl_1Warp.nii.gz \
+    --out=T1_to_DTI_fsl_Warp.nii.gz
+    
+  applywarp -i ${t1} \
+    -r DTI_1mm_tf_FA.nii.gz \
+    -w T1_to_DTI_fsl_Warp.nii.gz \
+    -o T1_to_DTI_1mm_final.nii.gz \
+    --interp=sinc
+}
+
+function reslice_flair
+{
+
+  coreg_dir=${HOME}/work/datasets/leducq/coregistered
+  fl_dir=${HOME}/work/datasets/leducq/flair
+  
+  fl=${fl_dir}/${sub_id}/FLAIR_masked_n4.nii.gz
+  fl_to_t1_omat=${coreg_dir}/${sub_id}/FLAIR_to_T1.omat
+  
+  cd ${in_dir}/${sub_id}
+  
+  convert_xfm -omat FLAIR_to_DTI_fsl_affine.omat -concat \
+    T1_to_DTI_fsl_affine.omat \
+    ${fl_to_t1_omat}
+    
+  convertwarp --ref=DTI_1mm_tf_FA.nii.gz \
+    --premat=FLAIR_to_DTI_fsl_affine.omat \
+    --warp1=T1_to_DTI_fsl_1Warp.nii.gz \
+    --out=FLAIR_to_DTI_fsl_Warp.nii.gz
+    
+  applywarp -i ${fl} \
+    -r DTI_1mm_tf_FA.nii.gz \
+    -w FLAIR_to_DTI_fsl_Warp.nii.gz \
+    -o FLAIR_to_DTI_1mm_final.nii.gz \
+    --interp=sinc
+}
+
+function reslice_fs_seg
+{
+  fs_dir=${HOME}/work/datasets/leducq/freesurfer
+  fs_seg=${fs_dir}/${sub_id}/mri/aparc+aseg_hypo_as_wm.nii.gz
+  
+  
+  fs_to_t1_omat=${fs_dir}/${sub_id}/mri/freesurfer_to_subject.omat
+  
+  cd ${in_dir}/${sub_id}
+  
+  ## affine only for seg ##
+  convert_xfm -omat FS_to_DTI_fsl_affine.omat -concat \
+    T1_to_DTI_fsl_affine.omat \
+    ${fs_to_t1_omat}
+  
+  flirt -in ${fs_seg} \
+    -out FS_seg_to_DTI_affine.nii.gz \
+    -init FS_to_DTI_fsl_affine.omat \
+    -applyxfm \
+    -ref DTI_1mm_tf_FA.nii.gz \
+     -interp nearestneighbour
+  
+}
+
+
+#-------------------------------------------------------------------------------
+# PROCESSING
+#-------------------------------------------------------------------------------
+
+if [[ $# -eq 0 ]]; then
+  prep_dirs
+elif [[ $# -eq 1 ]]; then
+  idx=$1
+  echo $idx
+	sub_id=$(cat ${log_fn} | head -n ${idx} | tail -n 1)
+  echo $sub_id
+ 
+  process_dti
+  #coreg_t1_and_dti
+  #reslice_flair
+  #reslice_fs_seg
+  
+fi
+
+#-------------------------------------------------------------------------------
+
