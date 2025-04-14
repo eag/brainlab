@@ -1,0 +1,60 @@
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# C++ compiled files
+*.o
+*.out
+*.exe
+*.dll
+*.so
+*.dylib
+*.dSYM
+
+
+# Python compiled files
+*.pyc
+*.pyo
+__pycache__/
+*.egg-info
+*.egg
+
+
+# Matlab compiled files
+*.mex*
+*.mexa64
+*.mexw32
+*.mexw64
+*.mexmaci64
+*.mexmaci
+*.mexglx
+*.mexa64
+*.mexsol
+*.mexhp7
+*.mat
+
+# Bash generated files
+*.swp
+*~*
+
+
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# Build output directories
+build/
+dist/
+out/
+bin/
+
+# Dependency directories
+env/
+venv/
