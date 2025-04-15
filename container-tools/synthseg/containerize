@@ -1,0 +1,54 @@
+#!/bin/bash
+# run on local machine with sudo
+#  docker image -> docker archive -> singularity for CC
+
+
+## SETUP ##
+
+version=v2.0
+name=synthseg
+user_dir=egibson
+in_dir=/home/${user_dir}/work/code/brainlab/container-tools/synthseg/
+out_dir=/home/${user_dir}/work/containers/${name}/${version}
+model_src_dir=/home/${user_dir}/work/models/synthseg/v2.0
+mkdir -p ${out_dir}
+
+
+cd "${in_dir}"
+
+# TEMP DIR to build context
+build_dir="${in_dir}/build_${version}"
+rm -rf "${build_dir}"
+mkdir -p "${build_dir}"
+
+# Copy Dockerfile
+cp Dockerfile "${build_dir}/"
+
+# Copy models (optional, if you want them baked into the container)
+mkdir -p "${build_dir}/models"
+cp -r ${model_src_dir}/* "${build_dir}/models/"
+
+# Build Docker image
+cd "${build_dir}"
+docker build -t ${name}:${version} .
+
+# Save Docker image to archive
+docker save ${name}:${version} -o ${name}.tar
+
+# Convert Docker archive to Singularity image
+singularity build --force ${name}.sif docker-archive://${name}.tar
+
+# Move outputs to container directory
+mv ${name}.sif "${out_dir}/"
+mv ${name}.tar "${out_dir}/"
+(cd "${out_dir}" && gzip -f ${name}.tar)
+
+# Cleanup
+docker image rm ${name}:${version}
+rm -rf "${build_dir}"
+singularity cache clean -f
+
+# Permissions
+chmod 777 "${out_dir}"/*
+
+

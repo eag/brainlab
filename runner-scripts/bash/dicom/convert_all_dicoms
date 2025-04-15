@@ -1,0 +1,66 @@
+#!/bin/bash
+set -euo pipefail
+
+# ==============================================================================
+# Flattened DICOM to NIfTI conversion using dcm2niix
+# Recursively processes DICOM folders, outputs NIfTIs into a flat folder
+# Logs each conversion, skips duplicates, supports dry-run and verbose modes
+# ==============================================================================
+
+# -------------------------- INPUT ARGUMENTS ----------------------------------
+
+INPUT_DIR="${1}"
+OUTPUT_DIR="${2}"
+DRY_RUN=false
+VERBOSE=false
+
+shift 2 || true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true ;;
+    --verbose) VERBOSE=true ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+  shift
+done
+
+if [[ -z "$INPUT_DIR" || -z "$OUTPUT_DIR" ]]; then
+  echo "Usage: $0 <dicom_input_folder> <nifti_output_folder> [--dry-run] [--verbose]"
+  exit 1
+fi
+
+mkdir -p "$OUTPUT_DIR"
+LOG_FILE="${OUTPUT_DIR}/conversion_log.txt"
+touch "$LOG_FILE"
+
+echo "Input directory: $INPUT_DIR"
+echo "Output directory: $OUTPUT_DIR"
+$DRY_RUN && echo "Mode: DRY-RUN"
+$VERBOSE && echo "Mode: VERBOSE"
+
+# --------------------------- MAIN CONVERSION LOOP ----------------------------
+
+find "$INPUT_DIR" -type d | while read -r subdir; do
+  if find "$subdir" -maxdepth 1 -type f | grep -q .dcm; then
+    scan_hash=$(echo "$subdir" | md5sum | awk '{print $1}')
+    scan_tag=$(basename "$subdir")_${scan_hash:0:8}
+
+    # Skip if a matching series has already been converted
+    existing=$(find "$OUTPUT_DIR" -type f -name "*${scan_tag}*.nii.gz" | wc -l)
+    if [[ "$existing" -gt 0 ]]; then
+      $VERBOSE && echo "Skipping (already converted): $subdir"
+      continue
+    fi
+
+    if $DRY_RUN; then
+      echo "[DRY RUN] Would convert: $subdir"
+    else
+      $VERBOSE && echo "Converting: $subdir"
+      dcm2niix -z y -f %p_%s -o "$OUTPUT_DIR" "$subdir" >> "$LOG_FILE" 2>&1
+      echo "Converted: $subdir" >> "$LOG_FILE"
+    fi
+  fi
+done
+
+echo "Conversion complete. See log: $LOG_FILE"

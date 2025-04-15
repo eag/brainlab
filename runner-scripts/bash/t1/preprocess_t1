@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -euo pipefail
+
+
+#-------------------------------------------------------------------------------
+# SETUP
+#-------------------------------------------------------------------------------
+
+t1_fn=${1}
+
+
+#-------------------------------------------------------------------------------
+# FUNCTIONS
+#-------------------------------------------------------------------------------
+
+function prep_dir
+{
+  mkdir -p ${list_dir}
+  $(cd ${in_dir}; ls | grep -Ev "lists" > ${list_fn})
+}
+
+function run_synthseg
+{
+  echo "running synthseg"
+  cd ${in_dir}/${sub_id}
+  mri_synthseg --i T1.nii.gz --o T1_synthseg.nii.gz --threads 1
+  mri_synthseg --i FLAIR.nii.gz --o FLAIR_synthseg.nii.gz --threads 1
+}
+
+
+#-------------------------------------------------------------------------------
+# PROCESSING
+#-------------------------------------------------------------------------------
+
+if [[ $# -eq 0 ]]; then
+  prep_dir
+elif [[ $# -eq 1 ]]; then
+  idx=$1
+  echo $idx
+	sub_id=$(cat ${list_fn} | head -n ${idx} | tail -n 1)
+  echo $sub_id
+
+  
+  #run_synthseg
+  
+
+fi

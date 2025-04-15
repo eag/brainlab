@@ -1,0 +1,89 @@
+#!/bin/bash
+set -euo pipefail
+
+# ============================================================================
+# Script: register_t1_to_dti.sh
+# Description: Register T1w anatomical image to distortion-corrected DWI space
+#              using ANTs, following QSIPrep-style registration
+#              Includes inverse warp (DWI to T1) and FSL-compatible outputs
+# Author: Erin (2025)
+# Dependencies: ANTs, FSL, MRtrix3, c3d, wb_command
+# ============================================================================
+
+# ---------------------------- INPUTS ----------------------------------------
+SUB_ID=$1
+T1_PATH=$2                         # e.g., /path/to/sub-01_T1w.nii.gz
+PREPROC_DWI=$3                     # e.g., /path/to/dwi_preproc.nii.gz
+OUT_DIR=$4                         # e.g., /path/to/derivatives/dtiproc/sub-01
+THREADS=6
+
+# Create working directory
+REG_DIR=${OUT_DIR}/t1reg
+mkdir -p "$REG_DIR"
+cd "$REG_DIR"
+
+log() {
+  echo "[`date '+%F %T'`] $*" | tee -a "${OUT_DIR}/logs/t1reg.log"
+}
+
+# ---------------------- Step 1: Bias-correct the T1 -------------------------
+log "Running N4 bias correction on T1"
+N4_T1="T1_n4.nii.gz"
+N4BiasFieldCorrection -d 3 -i "$T1_PATH" -o "$N4_T1" -v
+
+# ---------------------- Step 2: Extract mean b0 from preprocessed DWI -------
+log "Extracting mean b=0 from preprocessed DWI"
+dwiextract "$PREPROC_DWI" - -bzero | mrmath - mean mean_b0.nii.gz -axis 3 -force
+
+# ---------------------- Step 3: Brain masking (optional for QA) -------------
+bet mean_b0.nii.gz b0_brain -m -f 0.3
+
+# ---------------------- Step 4: Register T1 to DWI (nonlinear) --------------
+log "Registering T1 to mean b0"
+antsRegistrationSyN.sh \
+  -d 3 \
+  -f mean_b0.nii.gz \
+  -m "$N4_T1" \
+  -o T1_to_DWI_ \
+  -n $THREADS \
+  -t s \
+  -x b0_brain_mask.nii.gz
+
+# Output files:
+# T1_to_DWI_1Warp.nii.gz: nonlinear warp
+# T1_to_DWI_0GenericAffine.mat: affine transform
+# T1_to_DWI_Warped.nii.gz: T1 in DWI space
+
+# ---------------------- Step 5: Inverse warp (DWI to T1) ---------------------
+log "Computing inverse warp: DWI to T1"
+antsApplyTransforms -d 3 \
+  -i mean_b0.nii.gz \
+  -r "$N4_T1" \
+  -o DWI_to_T1_Warped.nii.gz \
+  -t [T1_to_DWI_0GenericAffine.mat,1] \
+  -t T1_to_DWI_1InverseWarp.nii.gz \
+  -n Linear
+
+# ---------------------- Step 6: Export FSL-friendly transforms --------------
+log "Converting transforms to FSL format"
+
+# Affine to FSL .mat
+c3d_affine_tool \
+  -ref mean_b0.nii.gz \
+  -src "$N4_T1" \
+  -itk T1_to_DWI_0GenericAffine.mat \
+  -ras2fsl -o T1_to_DWI_fsl_affine.mat
+
+# Nonlinear warp to FSL-compatible warp field
+wb_command -convert-warpfield \
+  -from-itk T1_to_DWI_1Warp.nii.gz \
+  -to-fnirt T1_to_DWI_fsl_1Warp.nii.gz \
+  mean_b0.nii.gz
+
+convertwarp \
+  --ref=mean_b0.nii.gz \
+  --premat=T1_to_DWI_fsl_affine.mat \
+  --warp1=T1_to_DWI_fsl_1Warp.nii.gz \
+  --out=T1_to_DWI_fsl_Warp.nii.gz
+
+log "Registration complete: T1 to DWI and inverse saved in ${REG_DIR}"
