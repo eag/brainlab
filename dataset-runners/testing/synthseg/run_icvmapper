@@ -84,8 +84,6 @@ function icvmapper_t1
   mkdir -p ${out_dir}/${sub_id}
   
   cp ${tmp_dir}/icvHfB.nii.gz ${out_dir}/${sub_id}/
-  cp ${tmp_dir}/${sub_id}/T1w.nii.gz ${out_dir}/${sub_id}/
-  cp ${tmp_dir}/${sub_id}/FLAIR.nii.gz ${out_dir}/${sub_id}/
   
   cp $(find ${tmp_dir} -name "*pred_prob.nii.gz") \
     ${out_dir}/${sub_id}/icvHfB_prob.nii.gz
@@ -94,7 +92,6 @@ function icvmapper_t1
 	fslcpgeom ${t1} ${out_dir}/${sub_id}/icvHfB.nii.gz  
   
   rm -rf ${tmp_dir}
- 
 }
 
 #-------------------------------------------------------------------------------

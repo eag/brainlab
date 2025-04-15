@@ -1,11 +1,10 @@
 #!/bin/bash
 
 #SBATCH --account=def-mgoubran
-#SBATCH --time=0:5:0
+#SBATCH --time=0:25:00
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --array=1-1%1
 
 brainlab_dir=${HOME}/work/code/brainlab
 
