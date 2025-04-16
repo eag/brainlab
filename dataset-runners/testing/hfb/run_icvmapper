@@ -4,6 +4,8 @@
 ### REQUIREMENTS ###
 #-------------------------------------------------------------------------------
 
+# BRAINLAB_DIR defined
+# apptainer/singularity
 # FSL (fslcpgeom)
 
 #-------------------------------------------------------------------------------
@@ -11,9 +13,7 @@
 #-------------------------------------------------------------------------------
 
 ### script variables ###
-brainlab_dir="${HOME}/work/code/brainlab"
 icvmapper_sif="${HOME}/work/containers/lab/icvmapper.sif"
-num_threads=1;
 
 ### data variables ###
 root_dir="${HOME}/tmp/test_datasets/dti/adni"
@@ -32,7 +32,7 @@ log_dir=${out_dir}/logs
 list_fn=${list_dir}/subject_list.txt
 
 ### path to repo tools ###
-export PATH=${PATH}:${brainlab_dir}/core-tools/bash
+export PATH=${PATH}:${BRAINLAB_DIR}/wrapper-scripts/bash/core
 
 ### path to required software ###
 if [[ -z "${MODULEPATH}" ]]; then
@@ -66,32 +66,11 @@ function prep_dir
 
 function icvmapper_t1
 {
-  tmp_dir=$(bltCreateTmpDir ${tmp_root} icv_${sub_id})
-
-  mkdir ${tmp_dir}/${sub_id}
-  cp ${in_dir}/${sub_id}/${t1_fn} ${tmp_dir}/${sub_id}/
-  t1=${tmp_dir}/${sub_id}/T1.nii.gz
-
-  ${container_tool} exec \
-	  -B ${HOME} -B ${tmp_root} \
-  	${icvmapper_sif} icvmapper seg_icv \
-  	-t1 ${t1} \
-  	-o ${tmp_dir}/icvHfB.nii.gz \
-  	-b --thr 0.4
-  
-  #	--ign_ort -b --thr 0.4
-  	
-  mkdir -p ${out_dir}/${sub_id}
-  
-  cp ${tmp_dir}/icvHfB.nii.gz ${out_dir}/${sub_id}/
-  
-  cp $(find ${tmp_dir} -name "*pred_prob.nii.gz") \
-    ${out_dir}/${sub_id}/icvHfB_prob.nii.gz
-    
-  fslcpgeom ${t1} ${out_dir}/${sub_id}/icvHfB_prob.nii.gz
-	fslcpgeom ${t1} ${out_dir}/${sub_id}/icvHfB.nii.gz  
-  
-  rm -rf ${tmp_dir}
+  bltIcvmapper \
+    ${out_dir}/${sub_id} \
+    ${in_dir}/${sub_id}/${t1_fn} \
+    ${icvmapper_sif} \
+    -b --thr 0.4 -n 3
 }
 
 #-------------------------------------------------------------------------------
@@ -100,7 +79,7 @@ function icvmapper_t1
 
 if [[ $# -eq 0 ]]; then
   echo "icvmapper_sif: $(ls ${icvmapper_sif})"
-  bltCreateTmpDir
+ #bltCreateTmpDir
   prep_dir
 elif [[ $# -eq 1 ]]; then
 

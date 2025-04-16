@@ -1,0 +1,77 @@
+#!/bin/bash
+
+#-------------------------------------------------------------------------------
+### REQUIREMENTS ###
+#-------------------------------------------------------------------------------
+
+# BRAINLAB_DIR and CONTAINER_DIR defined
+# FSL (cpgeom)
+
+#-------------------------------------------------------------------------------
+### USAGE ###
+#-------------------------------------------------------------------------------
+
+if [[ $# -lt 2 ]]; then
+  echo ""
+  echo "Usage:"
+  echo "  $(basename $0) <output_dir> <t1_image> [icvmapper_opts]"
+  echo "Example:"
+  echo "  $(basename $0) sub_dir T1.nii.gz -b --thr 0.4"
+  echo "" 
+  exit 1
+fi
+
+#-------------------------------------------------------------------------------
+### SETUP ###
+#-------------------------------------------------------------------------------
+
+out_dir=$1
+t1=$2
+icvmapper_sif=$3
+icvmapper_opts=${@:4}
+
+export PATH=${PATH}:${BRAINLAB_DIR}/core-tools/bash
+
+### use apptainer, or singularity if apptainer is not available ###
+if command -v apptainer &> /dev/null; then
+  container_tool=apptainer
+elif command -v singularity &> /dev/null; then
+  container_tool=singularity
+else
+  echo "ERROR: neither apptainer nor singularity found in PATH."
+  exit 1
+fi
+
+#-------------------------------------------------------------------------------
+### PROCESSING ###
+#-------------------------------------------------------------------------------
+
+tmp_dir=$(bltCreateTmpDir ${out_dir} tmp_icv)
+
+if [[ $? -ne 0 ]]; then
+  echo "ERROR: bltCreateTmpDir failed"
+  exit 1
+fi
+echo ${tmp_dir}
+
+cp ${t1} ${tmp_dir}/T1.nii.gz
+t1=${tmp_dir}/T1.nii.gz
+
+${container_tool} exec \
+  -B ${HOME} -B ${out_dir} \
+  ${icvmapper_sif} icvmapper seg_icv \
+  -t1 ${t1} \
+  -o ${tmp_dir}/icvHfB.nii.gz \ 
+  ${icvmapper_opts}
+  
+cp ${tmp_dir}/icvHfB.nii.gz ${out_dir}/
+
+cp $(find ${tmp_dir} -name "*pred_prob.nii.gz") \
+  ${out_dir}/icvHfB_prob.nii.gz
+  
+fslcpgeom ${t1} ${out_dir}/icvHfB_prob.nii.gz
+fslcpgeom ${t1} ${out_dir}/icvHfB.nii.gz  
+
+rm -rf ${tmp_dir}
+
+#-------------------------------------------------------------------------------

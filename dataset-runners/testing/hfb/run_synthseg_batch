@@ -1,0 +1,16 @@
+#!/bin/bash
+
+#SBATCH --account=def-mgoubran
+#SBATCH --time=0:5:0
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --array=1-1%1
+
+
+# NOTE: set spus-per-task to match the number of threads specified in run_synthseg
+
+idx=$SLURM_ARRAY_TASK_ID
+BRAINLAB_DIR=${HOME}/work/code/brainlab
+
+${BRAINLAB_DIR}/dataset-processing/testing/synthseg/run_synthseg ${idx}

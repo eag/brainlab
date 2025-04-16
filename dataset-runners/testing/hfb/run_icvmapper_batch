@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 
-brainlab_dir=${HOME}/work/code/brainlab
+export BRAINLAB_DIR=${HOME}/work/code/brainlab
 
 idx=$SLURM_ARRAY_TASK_ID
-${brainlab_dir}/dataset-runners/testing/synthseg/run_icvmapper ${idx}
+${BRAINLAB_DIR}/dataset-runners/testing/synthseg/run_icvmapper ${idx}
