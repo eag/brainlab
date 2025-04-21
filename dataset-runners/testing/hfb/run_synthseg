@@ -36,6 +36,7 @@ if [[ -z "${MODULEPATH}" ]]; then
  echo "using apptainer/singularity on path"
 else
   module --force purge
+  module load StdEnv/2023
   module load apptainer/1.3.4
 fi
 
@@ -84,19 +85,20 @@ function prep_dir
 function run_synthseg
 {
   if [[ -f ${in_dir}/${sub_id}/${t1_fn} ]]; then  
-    ${container_tool} run --pwd / ${synthseg_sif} \
+    ${container_tool} run --cleanenv --contain --pwd / ${synthseg_sif} \
       --i ${in_dir}/${sub_id}/${t1_fn} \
       --o ${out_dir}/${sub_id}/T1_synthseg.nii.gz \
       --threads ${num_threads} 
   fi
 
   if [[ -f ${in_dir}/${sub_id}/${fl_fn} ]]; then  
-    ${container_tool} run --pwd / ${synthseg_sif} \
+    ${container_tool} run --cleanenv --contain --pwd / ${synthseg_sif} \
       --i ${in_dir}/${sub_id}/${fl_fn} \
       --o ${out_dir}/${sub_id}/FLAIR_synthseg.nii.gz \
       --threads ${num_threads} 
   fi
 }
+
 
 #-------------------------------------------------------------------------------
 ### PROCESSING ###
