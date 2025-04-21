@@ -11,7 +11,6 @@
 ### USAGE ###
 #-------------------------------------------------------------------------------
 
-if [[ $# -lt 2 ]]; then
   echo ""
   echo "Usage:"
   echo "  $(basename $0) <output_dir> <t1_image> [icvmapper_opts]"

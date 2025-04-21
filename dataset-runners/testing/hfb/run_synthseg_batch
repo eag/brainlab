@@ -8,7 +8,7 @@
 #SBATCH --array=1-1%1
 
 
-# NOTE: set spus-per-task to match the number of threads specified in run_synthseg
+# NOTE: ensure that cpus-per-task above matches the number of threads specified in run_synthseg
 
 idx=$SLURM_ARRAY_TASK_ID
 BRAINLAB_DIR=${HOME}/work/code/brainlab
