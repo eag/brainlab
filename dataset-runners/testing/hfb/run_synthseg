@@ -31,6 +31,13 @@ log_dir=${out_dir}/logs
 list_fn=${list_dir}/subject_list.txt
 synthseg_sif="${BLT_CONTAINER_DIR}/synthseg.sif"
 
+### path to required software ###
+if [[ -z "${MODULEPATH}" ]]; then
+ echo "using apptainer/singularity on path"
+else
+  module load apptainer/1.3.4
+fi
+
 ### use apptainer, or singularity if apptainer is not available ###
 if command -v apptainer &> /dev/null; then
   container_tool=apptainer
@@ -39,13 +46,6 @@ elif command -v singularity &> /dev/null; then
 else
   echo "ERROR: neither apptainer nor singularity found in PATH."
   exit 1
-fi
-
-### path to required software ###
-if [[ -z "${MODULEPATH}" ]]; then
- echo "using apptainer/singularity on path"
-else
-  module load apptainer/1.3.4
 fi
 
 ### ensure BLT_CONTAINER_DIR defined ###
