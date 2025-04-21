@@ -5,8 +5,10 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
+#SBATCH --array=1-1%1
 
 export BRAINLAB_DIR=${HOME}/work/code/brainlab
+export BLT_CONTAINER_DIR=${SCRATCH}/containers/current
 
 idx=$SLURM_ARRAY_TASK_ID
-${BRAINLAB_DIR}/dataset-runners/testing/synthseg/run_icvmapper ${idx}
+${BRAINLAB_DIR}/dataset-runners/testing/hfb/run_icvmapper ${idx}

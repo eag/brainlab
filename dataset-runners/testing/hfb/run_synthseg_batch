@@ -12,6 +12,6 @@
 
 idx=$SLURM_ARRAY_TASK_ID
 BRAINLAB_DIR=${HOME}/work/code/brainlab
-module load apptainer/1.3.4
+BLT_CONTAINER_DIR=${SCRATCH}/containers/current
 
 ${BRAINLAB_DIR}/dataset-runners/testing/hfb/run_synthseg ${idx}

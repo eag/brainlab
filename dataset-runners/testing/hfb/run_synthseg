@@ -12,7 +12,7 @@
 #-------------------------------------------------------------------------------
 
 ### script variables ###
-num_threads=1;
+num_threads=8;
 
 ### data variables ###
 root_dir="${SCRATCH}"
@@ -35,6 +35,7 @@ synthseg_sif="${BLT_CONTAINER_DIR}/synthseg.sif"
 if [[ -z "${MODULEPATH}" ]]; then
  echo "using apptainer/singularity on path"
 else
+  module --force purge
   module load apptainer/1.3.4
 fi
 
