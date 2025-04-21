@@ -57,7 +57,7 @@ echo ${tmp_dir}
 cp ${t1} ${tmp_dir}/T1.nii.gz
 t1=${tmp_dir}/T1.nii.gz
 
-${container_tool} exec \
+${container_tool} exec --cleanenv --contain \
   -B ${HOME} -B ${out_dir} \
   ${icvmapper_sif} icvmapper seg_icv \
   -t1 ${t1} \
