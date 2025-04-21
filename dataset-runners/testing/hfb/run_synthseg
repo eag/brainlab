@@ -15,7 +15,7 @@
 num_threads=1;
 
 ### data variables ###
-root_dir="${HOME}/tmp/test_datasets/dti/adni"
+root_dir="${SCRATCH}"
 in_dir="${root_dir}/organized"
 out_dir="${root_dir}/derivatives/synthseg"
 t1_fn="T1.nii.gz"
