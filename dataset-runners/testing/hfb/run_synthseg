@@ -1,37 +1,38 @@
 #!/bin/bash
 
-#-------------------------------------------------------------------------------
+#===============================================================================
 ### REQUIREMENTS ###
-#-------------------------------------------------------------------------------
+#===============================================================================
 
 # BLT_CONTAINER_DIR defined (synthseg.sif)
-# apptainer/singularity
+# apptainer (or singularity symlinked to apptainer)
 
 #-------------------------------------------------------------------------------
-### SETUP ###
+### VARIABLES ###
 #-------------------------------------------------------------------------------
 
 ### script variables ###
-num_threads=8;
+NUM_THREADS=1;
 
 ### data variables ###
-root_dir="${SCRATCH}"
-in_dir="${root_dir}/organized"
-out_dir="${root_dir}/derivatives/synthseg"
-t1_fn="T1.nii.gz"
-fl_fn=""
+BASE_DIR="${HOME}/tmp/test_datasets/dti/leducq"
+IN_DIR="${BASE_DIR}/organized"
+OUT_DIR="${BASE_DIR}/derivatives/synthseg"
+T1_FN="T1.nii.gz"
+FL_FN=""
 
 #-------------------------------------------------------------------------------
 ### CONFIG ###
 #-------------------------------------------------------------------------------
 
 ### standard variables ###
-list_dir=${out_dir}/lists
-log_dir=${out_dir}/logs
-list_fn=${list_dir}/subject_list.txt
-synthseg_sif="${BLT_CONTAINER_DIR}/synthseg.sif"
+LIST_DIR=${OUT_DIR}/lists
+LOG_DIR=${OUT_DIR}/logs
+LIST_FN=${LIST_DIR}/subject_list.txt
+SYNTHSEG_SIF="${BLT_CONTAINER_DIR}/synthseg.sif"
 
-### path to required software ###
+### checks and paths ###
+
 if [[ -z "${MODULEPATH}" ]]; then
  echo "using apptainer/singularity on path"
 else
@@ -40,28 +41,17 @@ else
   module load apptainer/1.3.4
 fi
 
-### use apptainer, or singularity if apptainer is not available ###
-if command -v apptainer &> /dev/null; then
-  container_tool=apptainer
-elif command -v singularity &> /dev/null; then
-  container_tool=singularity
-else
-  echo "ERROR: neither apptainer nor singularity found in PATH."
+for var in BLT_CONTAINER_DIR; do
+  if [[ -z "${!var}" ]]; then
+    echo "ERROR: $var not set"
+    exit 1
+  fi
+done
+
+if [[ ! -f ${SYNTHSEG_SIF} ]]; then
+  echo "ERROR: ${SYNTHSEG_SIF} not found"
   exit 1
 fi
-
-### ensure BLT_CONTAINER_DIR defined ###
-if [[ -z "${BLT_CONTAINER_DIR}" ]]; then
-  echo "ERROR: BLT_CONTAINER_DIR not set"
-  exit 1
-fi
-
-### ensure synthseg.sif exists ###
-if [[ ! -f ${synthseg_sif} ]]; then
-  echo "ERROR: ${synthseg_sif} not found"
-  exit 1
-fi
-
 
 #-------------------------------------------------------------------------------
 ### FUNCTIONS ###
@@ -71,31 +61,35 @@ function prep_dir
 {
   echo "Preparing directories"
 
-  mkdir -p ${list_dir}
-  mkdir -p ${out_dir}
+  mkdir -p ${LIST_DIR}
+  mkdir -p ${OUT_DIR}
 
-  rm -f ${list_fn}
-  $(cd ${in_dir}; ls -d * | grep -Ev "lists" | grep -Ev "logs" > ${list_fn})
+  rm -f ${LIST_FN}
+  $(cd ${IN_DIR}; ls -d * | grep -Ev "lists" | grep -Ev "logs" > ${LIST_FN})
   while read -r line; do
-    sub_id=$(echo ${line} | cut -d'/' -f1)
-    mkdir -p ${out_dir}/${sub_id}
-  done < ${list_fn}  
+    SUB_ID=$(echo ${line} | cut -d'/' -f1)
+    mkdir -p ${OUT_DIR}/${SUB_ID}
+  done < ${LIST_FN}  
 }
  
 function run_synthseg
 {
-  if [[ -f ${in_dir}/${sub_id}/${t1_fn} ]]; then  
-    ${container_tool} run --cleanenv --contain --pwd / ${synthseg_sif} \
-      --i ${in_dir}/${sub_id}/${t1_fn} \
-      --o ${out_dir}/${sub_id}/T1_synthseg.nii.gz \
-      --threads ${num_threads} 
+  if [[ -f ${IN_DIR}/${SUB_ID}/${T1_FN} ]]; then  
+    apptainer run --cleanenv --contain \
+      --bind ${IN_DIR}:/input --bind ${OUT_DIR}:/output \
+      --pwd / ${SYNTHSEG_SIF} \
+      --i /input/${SUB_ID}/${T1_FN} \
+      --o /output/${SUB_ID}/T1_synthseg.nii.gz \
+      --threads ${NUM_THREADS} 
   fi
 
-  if [[ -f ${in_dir}/${sub_id}/${fl_fn} ]]; then  
-    ${container_tool} run --cleanenv --contain --pwd / ${synthseg_sif} \
-      --i ${in_dir}/${sub_id}/${fl_fn} \
-      --o ${out_dir}/${sub_id}/FLAIR_synthseg.nii.gz \
-      --threads ${num_threads} 
+  if [[ -f ${IN_DIR}/${SUB_ID}/${FL_FN} ]]; then  
+    apptainer run --cleanenv --contain \
+      --bind ${IN_DIR}:/input --bind ${OUT_DIR}:/output \
+      --pwd / ${SYNTHSEG_SIF} \
+      --i /input/${SUB_ID}/${FL_FN} \
+      --o /output/${SUB_ID}/FLAIR_synthseg.nii.gz \
+      --threads ${NUM_THREADS}
   fi
 }
 
@@ -109,8 +103,8 @@ if [[ $# -eq 0 ]]; then
 elif [[ $# -eq 1 ]]; then
 
   ### get subject ID from the list ###
-  idx=$1
-  sub_id=$(cat ${list_fn} | head -n ${idx} | tail -n 1)
+  IDX=$1
+  SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
   
   ### run container for subject ID ###
   run_synthseg
@@ -118,6 +112,3 @@ elif [[ $# -eq 1 ]]; then
 fi
 
 #-------------------------------------------------------------------------------
-
-
-

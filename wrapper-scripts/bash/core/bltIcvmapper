@@ -1,77 +1,91 @@
 #!/bin/bash
 
-#-------------------------------------------------------------------------------
+#===============================================================================
 ### REQUIREMENTS ###
-#-------------------------------------------------------------------------------
+#===============================================================================
 
 # BRAINLAB_DIR and BLT_CONTAINER_DIR defined
 # FSL (cpgeom)
+# apptainer (or singularity symlinked to apptainer)
 
 #-------------------------------------------------------------------------------
 ### USAGE ###
 #-------------------------------------------------------------------------------
+
 if [[ $# -lt 2 ]]; then
   echo ""
   echo "Usage:"
-  echo "  $(basename $0) <output_dir> <t1_image> [icvmapper_opts]"
+  echo "  $(basename $0) <OUT_DIR> <T1_IMAGE> [ICVMAPPER_OPTS]"
   echo "Example:"
-  echo "  $(basename $0) sub_dir T1.nii.gz -b --thr 0.4"
+  echo "  $(basename $0) SUB_DIR T1.nii.gz -b --thr 0.4"
   echo "" 
   exit 1
 fi
 
 #-------------------------------------------------------------------------------
-### SETUP ###
+### CONFIG ###
 #-------------------------------------------------------------------------------
 
-out_dir=$1
-t1=$2
-icvmapper_opts=${@:3}
+OUT_DIR=$1
+T1=$2
+ICVMAPPER_OPTS=${@:3}
 
+for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
+  if [[ -z "${!var}" ]]; then
+    echo "ERROR: $var not set"
+    exit 1
+  fi
+done
+
+if [[ -z "${MODULEPATH}" ]]; then
+ echo "using fsl/apptainer on path"
+else
+  module --force purge
+  module load StdEnv/2020
+  module load apptainer/1.2.4
+  module load gcc/9.3.0
+  module load fsl/6.0.4
+fi
 
 export PATH=${PATH}:${BRAINLAB_DIR}/core-tools/bash
-icvmapper_sif=${BLT_CONTAINER_DIR}/icvmapper.sif
 
-### use apptainer, or singularity if apptainer is not available ###
-if command -v apptainer &> /dev/null; then
-  container_tool=apptainer
-elif command -v singularity &> /dev/null; then
-  container_tool=singularity
-else
-  echo "ERROR: neither apptainer nor singularity found in PATH."
+ICVMAPPER_SIF="${BLT_CONTAINER_DIR}/icvmapper.sif"
+if [[ ! -f ${ICVMAPPER_SIF} ]]; then
+  echo "ERROR: ${ICVMAPPER_SIF} not found"
   exit 1
 fi
+
 
 #-------------------------------------------------------------------------------
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
 
-tmp_dir=$(bltCreateTmpDir ${out_dir} tmp_icv)
+TMP_DIR=$(bltCreateTmpDir ${OUT_DIR} tmp_icv)
 
 if [[ $? -ne 0 ]]; then
   echo "ERROR: bltCreateTmpDir failed"
   exit 1
 fi
-echo ${tmp_dir}
+echo ${TMP_DIR}
 
-cp ${t1} ${tmp_dir}/T1.nii.gz
-t1=${tmp_dir}/T1.nii.gz
+cp ${T1} ${TMP_DIR}/T1.nii.gz
 
-${container_tool} exec --cleanenv --contain \
-  -B ${HOME} -B ${out_dir} \
-  ${icvmapper_sif} icvmapper seg_icv \
-  -t1 ${t1} \
-  -o ${tmp_dir}/icvHfB.nii.gz \
-  ${icvmapper_opts}
+apptainer exec --cleanenv --contain \
+  --bind ${TMP_DIR}:/data  \
+  ${ICVMAPPER_SIF} icvmapper seg_icv \
+  -t1 /data/T1.nii.gz \
+  -o /data/icvHfB.nii.gz \
+  ${ICVMAPPER_OPTS}
   
-cp ${tmp_dir}/icvHfB.nii.gz ${out_dir}/
+cp ${TMP_DIR}/icvHfB.nii.gz ${OUT_DIR}/
 
-cp $(find ${tmp_dir} -name "*pred_prob.nii.gz") \
-  ${out_dir}/icvHfB_prob.nii.gz
+cp $(find ${TMP_DIR} -name "*pred_prob.nii.gz") \
+  ${OUT_DIR}/icvHfB_prob.nii.gz
   
-fslcpgeom ${t1} ${out_dir}/icvHfB_prob.nii.gz
-fslcpgeom ${t1} ${out_dir}/icvHfB.nii.gz  
+fslcpgeom ${T1} ${OUT_DIR}/icvHfB_prob.nii.gz
+fslcpgeom ${T1} ${OUT_DIR}/icvHfB.nii.gz  
 
-rm -rf ${tmp_dir}
+rm -rf ${TMP_DIR}
 
 #-------------------------------------------------------------------------------
+

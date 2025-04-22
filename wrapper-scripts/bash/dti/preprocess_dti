@@ -1,43 +1,46 @@
 #!/bin/bash
 set -euo pipefail
 
+#-------------------------------------------------------------------------------
+### USAGE ###
+#-------------------------------------------------------------------------------
 
- mrtrix/3.0.4
-# ============================================================================
-# DTI Preprocessing Pipeline (BIDS-lite Compatible)
-# Author: Erin (2025)
-# Description:
-#   - Works on non-BIDS datasets with consistent folder structure
-#   - Auto-detects AP/PA images, JSON metadata (or uses fallbacks)
-#   - Runs denoise, degibbs, topup+eddy (if applicable), bias correction, dtifit
-# Dependencies: MRtrix3, FSL, ANTs, jq (for JSON parsing)
-# ============================================================================
+### ###
 
-# ---------------------------- CONFIGURATION ----------------------------------
-SUB_ID=$1
-BASE_DIR=/path/to/rawdata
-SUBJ_DIR=${BASE_DIR}/sub-${SUB_ID}
-OUT_DIR=${BASE_DIR}/derivatives/dtiproc/sub-${SUB_ID}
-mkdir -p ${OUT_DIR}/logs
+#-------------------------------------------------------------------------------
+### VARIABLES ###
+#-------------------------------------------------------------------------------
 
-# Default values (fallbacks if no JSON)
+SUB_ID=002_S_0413
+IN_DIR=${HOME}/tmp/test_datasets/dti/adni/organized/
+OUT_DIR=${HOME}/tmp/test_datasets/dti/adni/derivatives/dti
+
+#-------------------------------------------------------------------------------
+### CONFIG ###
+#-------------------------------------------------------------------------------
+
+
+### Default values (fallbacks if no JSON) ###
 DEFAULT_PE_DIR="j"
 DEFAULT_READOUT=0.0495301
 THREADS=6
 
+mkdir -p ${OUT_DIR}/logs
+
+
 log() {
-  echo "[`date '+%F %T'`] $*" | tee -a "${OUT_DIR}/logs/preproc.log"
+  echo "[`date '+%F %T'`] $*" | tee -a "${OUT_DIR}/logs/preproc_${SUB_ID}.log"
 }
 
 log "Starting DTI pipeline for ${SUB_ID}"
 
-# ---------------------------- FILES & METADATA -------------------------------
-DWI_AP=${SUBJ_DIR}/DTI_AP.nii.gz
-BVAL=${SUBJ_DIR}/DTI_AP.bval
-BVEC=${SUBJ_DIR}/DTI_AP.bvec
-JSON_AP=${SUBJ_DIR}/DTI_AP.json
-DWI_PA=${SUBJ_DIR}/DTI_PA.nii.gz
-JSON_PA=${SUBJ_DIR}/DTI_PA.json
+
+DWI_AP=${IN_DIR}/${SUB_ID}/DTI_AP.nii.gz
+BVAL=${IN_DIR}/${SUB_ID}/DTI_AP.bval
+BVEC=${IN_DIR}/${SUB_ID}/DTI_AP.bvec
+JSON_AP=${IN_DIR}/${SUB_ID}/DTI_AP.json
+DWI_PA=${IN_DIR}/${SUB_ID}/DTI_PA.nii.gz
+JSON_PA=${IN_DIR}/${SUB_ID}/DTI_PA.json
 
 HAS_PA=false
 [[ -f "$DWI_PA" && -s "$DWI_PA" ]] && HAS_PA=true

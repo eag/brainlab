@@ -1,72 +1,43 @@
 #!/bin/bash
 
-#-------------------------------------------------------------------------------
+#===============================================================================
 ### REQUIREMENTS ###
-#-------------------------------------------------------------------------------
+#===============================================================================
 
 # BRAINLAB_DIR, BLT_CONTAINER_DIR defined
-# apptainer/singularity
+# apptainer (or singularity symlinked to apptainer)
 # FSL (fslcpgeom)
 
 #-------------------------------------------------------------------------------
-### SETUP ###
+### VARIABLES ###
 #-------------------------------------------------------------------------------
 
 ### data variables ###
-root_dir="${SCRATCH}"
-in_dir="${root_dir}/organized"
-out_dir="${root_dir}/derivatives/icvmapper"
-tmp_root="${SCRATCH}/tmp"
-t1_fn=T1.nii.gz
+BASE_DIR="${HOME}/tmp/test_datasets/dti/leducq"
+IN_DIR="${BASE_DIR}/organized"
+OUT_DIR="${BASE_DIR}/derivatives/icvmapper"
+TMP_ROOT="${HOME}/tmp"
+T1_FN=T1.nii.gz
 
 #-------------------------------------------------------------------------------
 ### CONFIG ###
 #-------------------------------------------------------------------------------
 
 ### standard variables ###
-list_dir=${out_dir}/lists
-log_dir=${out_dir}/logs
-list_fn=${list_dir}/subject_list.txt
-icvmapper_sif="${BLT_CONTAINER_DIR}/icvmapper.sif"
+LIST_DIR=${OUT_DIR}/lists
+LOG_DIR=${OUT_DIR}/logs
+LIST_FN=${LIST_DIR}/subject_list.txt
 
-### path to required software ###
-if [[ -z "${MODULEPATH}" ]]; then
- echo "using fsl/apptainer/singularity on path"
-else
-  module --force purge
-  module load StdEnv/2020
-  module load apptainer/1.2.4
-  module load gcc/9.3.0
-  module load fsl/6.0.4
-fi
+### checks and paths ###
 
-### use apptainer, or singularity if apptainer is not available ###
-if command -v apptainer &> /dev/null; then
-  container_tool=apptainer
-elif command -v singularity &> /dev/null; then
-  container_tool=singularity
-else
-  echo "ERROR: neither apptainer nor singularity found in PATH."
-  exit 1
-fi
+for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
+  if [[ -z "${!var}" ]]; then
+    echo "ERROR: $var not set"
+    exit 1
+  fi
+done
 
-### ensure BRAINLAB_DIR, BLT_CONTAINER_DIR defined ###
-if [[ -z "${BRAINLAB_DIR}" ]]; then
-  echo "ERROR: BRAINLAB_DIR not set"
-  exit 1
-elif [[ -z "${BLT_CONTAINER_DIR}" ]]; then
-  echo "ERROR: BLT_CONTAINER_DIR not set"
-  exit 1
-fi
-
-### path to repo tools ###
 export PATH=${PATH}:${BRAINLAB_DIR}/wrapper-scripts/bash/core
-
-### ensure icvmapper.sif exists ###
-if [[ ! -f ${icvmapper_sif} ]]; then
-  echo "ERROR: ${icvmapper_sif} not found"
-  exit 1
-fi
 
 #-------------------------------------------------------------------------------
 ### FUNCTIONS ###
@@ -76,22 +47,22 @@ function prep_dir
 {
   echo "Preparing directories..."
   
-  mkdir -p ${list_dir}
-  mkdir -p ${out_dir}
+  mkdir -p ${LIST_DIR}
+  mkdir -p ${OUT_DIR}
 
-  rm -f ${list_fn}
-  $(cd ${in_dir}; ls -d * | grep -Ev "lists" | grep -Ev "logs" > ${list_fn})
+  rm -f ${LIST_FN}
+  $(cd ${IN_DIR}; ls -d * | grep -Ev "lists" | grep -Ev "logs" > ${LIST_FN})
   while read -r line; do
-    sub_id=$(echo ${line} | cut -d'/' -f1)
-    mkdir -p ${out_dir}/${sub_id}
-  done < ${list_fn}
+    SUB_ID=$(echo ${line} | cut -d'/' -f1)
+    mkdir -p ${OUT_DIR}/${SUB_ID}
+  done < ${LIST_FN}
 }
  
 function icvmapper_t1
 {
   bltIcvmapper \
-    ${out_dir}/${sub_id} \
-    ${in_dir}/${sub_id}/${t1_fn} \
+    ${OUT_DIR}/${SUB_ID} \
+    ${IN_DIR}/${SUB_ID}/${T1_FN} \
     -b --thr 0.4
 }
 
@@ -103,14 +74,11 @@ if [[ $# -eq 0 ]]; then
   prep_dir
 elif [[ $# -eq 1 ]]; then
   ### get subject ID from the list ###
-  idx=$1
-  sub_id=$(cat ${list_fn} | head -n ${idx} | tail -n 1)
+  IDX=$1
+  SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
   
   ### run container for subject ID ###
   icvmapper_t1
 fi
 
 #-------------------------------------------------------------------------------
-
-
-
