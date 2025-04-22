@@ -30,6 +30,11 @@ LIST_FN=${LIST_DIR}/subject_list.txt
 
 ### checks and paths ###
 
+if [[ $# -ne 1 ]]; then
+  echo "USAGE ERROR"
+  exit 1
+fi
+
 for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
   if [[ -z "${!var}" ]]; then
     echo "ERROR: $var not set"
@@ -38,6 +43,7 @@ for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
 done
 
 export PATH=${PATH}:${BRAINLAB_DIR}/wrapper-scripts/bash/core
+
 
 #-------------------------------------------------------------------------------
 ### FUNCTIONS ###
@@ -58,9 +64,9 @@ function prep_dir
   done < ${LIST_FN}
 }
  
-function icvmapper_t1
+function run_icvmapper
 {
-  bltIcvmapper \
+  blt_run_icvmapper \
     ${OUT_DIR}/${SUB_ID} \
     ${IN_DIR}/${SUB_ID}/${T1_FN} \
     -b --thr 0.4
@@ -70,15 +76,12 @@ function icvmapper_t1
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
 
-if [[ $# -eq 0 ]]; then
+IDX=$1
+if [[ ${IDX} -eq 0 ]]; then
   prep_dir
-elif [[ $# -eq 1 ]]; then
-  ### get subject ID from the list ###
-  IDX=$1
+else
   SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
-  
-  ### run container for subject ID ###
-  icvmapper_t1
+  run_icvmapper
 fi
 
 #-------------------------------------------------------------------------------

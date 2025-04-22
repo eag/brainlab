@@ -33,6 +33,11 @@ SYNTHSEG_SIF="${BLT_CONTAINER_DIR}/synthseg.sif"
 
 ### checks and paths ###
 
+if [[ $# -ne 1 ]]; then
+  echo "USAGE ERROR"
+  exit 1
+fi
+
 if [[ -z "${MODULEPATH}" ]]; then
  echo "using apptainer/singularity on path"
 else
@@ -52,6 +57,7 @@ if [[ ! -f ${SYNTHSEG_SIF} ]]; then
   echo "ERROR: ${SYNTHSEG_SIF} not found"
   exit 1
 fi
+
 
 #-------------------------------------------------------------------------------
 ### FUNCTIONS ###
@@ -74,22 +80,17 @@ function prep_dir
  
 function run_synthseg
 {
-  if [[ -f ${IN_DIR}/${SUB_ID}/${T1_FN} ]]; then  
-    apptainer run --cleanenv --contain \
-      --bind ${IN_DIR}:/input --bind ${OUT_DIR}:/output \
-      --pwd / ${SYNTHSEG_SIF} \
-      --i /input/${SUB_ID}/${T1_FN} \
-      --o /output/${SUB_ID}/T1_synthseg.nii.gz \
-      --threads ${NUM_THREADS} 
-  fi
+  local modality=$1
+  local input_fn=$2
+  local output_fn=$3
 
-  if [[ -f ${IN_DIR}/${SUB_ID}/${FL_FN} ]]; then  
+  if [[ -f "${IN_DIR}/${SUB_ID}/${input_fn}" ]]; then  
     apptainer run --cleanenv --contain \
-      --bind ${IN_DIR}:/input --bind ${OUT_DIR}:/output \
-      --pwd / ${SYNTHSEG_SIF} \
-      --i /input/${SUB_ID}/${FL_FN} \
-      --o /output/${SUB_ID}/FLAIR_synthseg.nii.gz \
-      --threads ${NUM_THREADS}
+      --bind "${IN_DIR}:/input" --bind "${OUT_DIR}:/output" \
+      --pwd / "${SYNTHSEG_SIF}" \
+      --i "/input/${SUB_ID}/${input_fn}" \
+      --o "/output/${SUB_ID}/${output_fn}" \
+      --threads "${NUM_THREADS}"
   fi
 }
 
@@ -98,17 +99,15 @@ function run_synthseg
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
 
-if [[ $# -eq 0 ]]; then
-  prep_dir
-elif [[ $# -eq 1 ]]; then
 
-  ### get subject ID from the list ###
-  IDX=$1
+IDX=$1
+if [[ ${IDX} -eq 0 ]]; then
+  prep_dir
+else
   SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
   
-  ### run container for subject ID ###
-  run_synthseg
-
+  run_synthseg "T1" "$T1_FN" "T1_synthseg.nii.gz"
+  run_synthseg "FLAIR" "$FL_FN" "FLAIR_synthseg.nii.gz"
 fi
 
 #-------------------------------------------------------------------------------
