@@ -1,0 +1,85 @@
+#!/bin/bash
+#================================================================================
+### REQUIREMENTS ###
+#================================================================================
+
+# apptainer (or singularity symlinked to apptainer)
+# BLT_CONTAINER_DIR defined (synthseg.sif)
+ 
+#-------------------------------------------------------------------------------
+### FUNCTIONS ###
+#-------------------------------------------------------------------------------
+
+function usage()
+{
+  echo ""
+  echo "Usage:"
+  echo "  $(basename $0) <input_fn> <output_fn> <num_threads> [options]"
+}
+
+function config()
+{
+  INPUT_FN=$1
+  OUTPUT_FN=$2
+  NUM_THREADS=$3;
+  OPTIONS="${@:4}"
+
+  if [[ $# -lt 3 ]]; then
+    usage
+    exit 1
+  fi
+
+  if [[ -z "${MODULEPATH}" ]]; then
+    echo "using apptainer/singularity on path"
+  else
+    module --force purge
+    module load StdEnv/2023
+    module load apptainer/1.3.4
+  fi
+
+  for var in BLT_CONTAINER_DIR; do
+    if [[ -z "${!var}" ]]; then
+      echo "ERROR: $var not set"
+      exit 1
+    fi
+  done
+
+  SYNTHSEG_SIF="${BLT_CONTAINER_DIR}/synthseg.sif"
+  if [[ ! -f ${SYNTHSEG_SIF} ]]; then
+    echo "ERROR: ${SYNTHSEG_SIF} not found"
+    exit 1
+  fi
+
+}
+
+function run_synthseg()
+{
+  local abs_input=$(realpath "${INPUT_FN}")
+  local abs_output=$(realpath -m "${OUTPUT_FN}") 
+  local in_dir=$(dirname "${abs_input}")
+  local out_dir=$(dirname "${abs_output}")
+  local in_file=$(basename "${abs_input}")
+  local out_file=$(basename "${abs_output}")
+
+  if [[ -f "${abs_input}" ]]; then  
+    apptainer run --cleanenv --contain \
+      --bind "${in_dir}:/input" --bind "${out_dir}:/output" \
+      --pwd / "${SYNTHSEG_SIF}" \
+      --i "/input/${in_file}" \
+      --o "/output/${out_file}" \
+      --threads "${NUM_THREADS}" \
+      ${OPTIONS}
+  else
+    echo "ERROR: Input file '${input_fn}' not found"
+    exit 1
+  fi
+}
+
+#-------------------------------------------------------------------------------
+### PROCESSING ###
+#-------------------------------------------------------------------------------
+
+config "$@"
+run_synthseg
+
+#-------------------------------------------------------------------------------
