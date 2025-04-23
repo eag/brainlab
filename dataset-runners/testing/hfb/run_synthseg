@@ -63,7 +63,7 @@ function prep_dir
   mkdir -p ${OUT_DIR}
 
   rm -f ${LIST_FN}
-  $(cd ${IN_DIR}; ls -d * | grep -Ev "lists" | grep -Ev "logs" > ${LIST_FN})
+  $(cd ${IN_DIR}; ls -d * | grep -Ev "lists|logs" > ${LIST_FN})
   while read -r line; do
     SUB_ID=$(echo ${line} | cut -d'/' -f1)
     mkdir -p ${OUT_DIR}/${SUB_ID}

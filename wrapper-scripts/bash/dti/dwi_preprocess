@@ -31,23 +31,25 @@ THREADS=6
 ### CONFIG ###
 #-------------------------------------------------------------------------------
 
-### standard variables ###
-LIST_DIR=${OUT_DIR}/lists
-LIST_FN=${LIST_DIR}/subject_list.txt
+function setup_environment
+{}
+  ### standard variables ###
+  LIST_DIR=${OUT_DIR}/lists
+  LIST_FN=${LIST_DIR}/subject_list.txt
 
-DWI_AP=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.nii.gz
-BVAL=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bval
-BVEC=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bvec
-JSON_AP=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
-DWI_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.nii.gz
-JSON_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
+  DWI_AP=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.nii.gz
+  BVAL=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bval
+  BVEC=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bvec
+  JSON_AP=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
+  DWI_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.nii.gz
+  JSON_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
 
-### checks and paths ###
-if [[ $# -ne 1 ]]; then
-  echo "USAGE ERROR"
-  exit 1
-fi
-
+  ### checks and paths ###
+  if [[ $# -ne 1 ]]; then
+    echo "USAGE ERROR"
+    exit 1
+  fi
+}
 
 #-------------------------------------------------------------------------------
 ### FUNCTIONS ###
@@ -56,12 +58,17 @@ fi
 function prep_dir
 {
   echo "Preparing directories..."
-  
+
+  if [[ ! -d ${IN_DIR} ]]; then
+    echo "Input directory does not exist: ${IN_DIR}"
+    exit 1
+  fi
+
   mkdir -p ${LIST_DIR}
   mkdir -p ${OUT_DIR}
 
   rm -f ${LIST_FN}
-  $(cd ${IN_DIR}; ls -d * | grep -Ev "lists" | grep -Ev "logs" > ${LIST_FN})
+  ls -d ${IN_DIR}/* | grep -Ev "lists|logs" > ${LIST_FN}
   while read -r line; do
     SUB_ID=$(echo ${line} | cut -d'/' -f1)
     mkdir -p ${OUT_DIR}/${SUB_ID}
@@ -145,6 +152,7 @@ function run_dwi_preprocess()
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
 
+setup_environment "$@"
 
 IDX=$1
 SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
