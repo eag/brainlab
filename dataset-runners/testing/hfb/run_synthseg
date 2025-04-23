@@ -54,6 +54,11 @@ function prep_dir
 {
   echo "Preparing directories"
 
+  if [[ ! -d ${IN_DIR} ]]; then
+    echo "ERROR: Input directory ${IN_DIR} does not exist"
+    exit 1
+  fi
+
   mkdir -p ${LIST_DIR}
   mkdir -p ${OUT_DIR}
 
