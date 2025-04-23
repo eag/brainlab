@@ -6,6 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --array=1-1%1
+#SBATCH --output=slurm_%x_%j.out
 
 
 # NOTE: ensure that cpus-per-task above matches the number of threads specified in run_synthseg
