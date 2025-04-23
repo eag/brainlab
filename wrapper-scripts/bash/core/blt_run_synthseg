@@ -75,8 +75,8 @@ function run_synthseg()
   apptainer run --cleanenv --contain \
     --bind "${in_dir}:/input" --bind "${out_dir}:/output" \
     --pwd / "${SYNTHSEG_SIF}" \
-    --i /input/${in_file} \
-    --o /output/${out_file} \
+    --i /input/"${in_file}" \
+    --o /output/"${out_file}" \
     --threads "${NUM_THREADS}"\
     "${OPTIONS[@]}"
 }

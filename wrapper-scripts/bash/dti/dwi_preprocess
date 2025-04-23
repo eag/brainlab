@@ -42,6 +42,13 @@ JSON_AP=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
 DWI_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.nii.gz
 JSON_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
 
+### checks and paths ###
+if [[ $# -ne 1 ]]; then
+  echo "USAGE ERROR"
+  exit 1
+fi
+
+
 #-------------------------------------------------------------------------------
 ### FUNCTIONS ###
 #-------------------------------------------------------------------------------

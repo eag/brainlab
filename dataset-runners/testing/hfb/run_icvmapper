@@ -13,7 +13,7 @@
 #-------------------------------------------------------------------------------
 
 ### data variables ###
-BASE_DIR="${HOME}/tmp/test_datasets/dti/leducq"
+BASE_DIR="${SCRATCH}/leducq"
 IN_DIR="${BASE_DIR}/organized"
 OUT_DIR="${BASE_DIR}/derivatives/icvmapper"
 TMP_ROOT="${HOME}/tmp"
@@ -23,27 +23,29 @@ T1_FN=T1.nii.gz
 ### CONFIG ###
 #-------------------------------------------------------------------------------
 
-### standard variables ###
-LIST_DIR=${OUT_DIR}/lists
-LOG_DIR=${OUT_DIR}/logs
-LIST_FN=${LIST_DIR}/subject_list.txt
+function setup_environment()
+{
+  ### standard variables ###
+  LIST_DIR=${OUT_DIR}/lists
+  LOG_DIR=${OUT_DIR}/logs
+  LIST_FN=${LIST_DIR}/subject_list.txt
 
-### checks and paths ###
+  ### checks and paths ###
 
-if [[ $# -ne 1 ]]; then
-  echo "USAGE ERROR"
-  exit 1
-fi
-
-for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
-  if [[ -z "${!var}" ]]; then
-    echo "ERROR: $var not set"
+  if [[ $# -ne 1 ]]; then
+    echo "USAGE ERROR"
     exit 1
   fi
-done
 
-export PATH=${PATH}:${BRAINLAB_DIR}/wrapper-scripts/bash/core
+  for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
+    if [[ -z "${!var}" ]]; then
+      echo "ERROR: $var not set"
+      exit 1
+    fi
+  done
 
+  export PATH=${PATH}:${BRAINLAB_DIR}/wrapper-scripts/bash/core
+}
 
 #-------------------------------------------------------------------------------
 ### FUNCTIONS ###
@@ -75,6 +77,8 @@ function run_icvmapper
 #-------------------------------------------------------------------------------
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
+
+setup_environment "$@"
 
 IDX=$1
 if [[ ${IDX} -eq 0 ]]; then
