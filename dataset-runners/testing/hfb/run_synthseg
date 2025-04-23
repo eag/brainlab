@@ -22,46 +22,33 @@ T1_FN="T1.nii.gz"
 FL_FN=""
 
 #-------------------------------------------------------------------------------
-### CONFIG ###
-#-------------------------------------------------------------------------------
-
-### standard variables ###
-LIST_DIR=${OUT_DIR}/lists
-LOG_DIR=${OUT_DIR}/logs
-LIST_FN=${LIST_DIR}/subject_list.txt
-SYNTHSEG_SIF="${BLT_CONTAINER_DIR}/synthseg.sif"
-
-### checks and paths ###
-
-if [[ $# -ne 1 ]]; then
-  echo "USAGE ERROR"
-  exit 1
-fi
-
-if [[ -z "${MODULEPATH}" ]]; then
- echo "using apptainer/singularity on path"
-else
-  module --force purge
-  module load StdEnv/2023
-  module load apptainer/1.3.4
-fi
-
-for var in BLT_CONTAINER_DIR; do
-  if [[ -z "${!var}" ]]; then
-    echo "ERROR: $var not set"
-    exit 1
-  fi
-done
-
-if [[ ! -f ${SYNTHSEG_SIF} ]]; then
-  echo "ERROR: ${SYNTHSEG_SIF} not found"
-  exit 1
-fi
-
-
-#-------------------------------------------------------------------------------
 ### FUNCTIONS ###
 #-------------------------------------------------------------------------------
+
+function setup_environment()
+{
+  ### standard variables ###
+  LIST_DIR=${OUT_DIR}/lists
+  LOG_DIR=${OUT_DIR}/logs
+  LIST_FN=${LIST_DIR}/subject_list.txt
+  SYNTHSEG_SIF="${BLT_CONTAINER_DIR}/synthseg.sif"
+
+  ### checks and paths ###
+
+  if [[ $# -ne 1 ]]; then
+    echo "USAGE ERROR"
+    exit 1
+  fi
+
+  for var in BLT_CONTAINER_DIR; do
+    if [[ -z "${!var}" ]]; then
+      echo "ERROR: $var not set"
+      exit 1
+    fi
+  done
+
+  export PATH=${PATH}:${BRAINLAB_DIR}/wrapper-scripts/bash/core
+}
 
 function prep_dir
 {
@@ -80,18 +67,10 @@ function prep_dir
  
 function run_synthseg
 {
-  local modality=$1
-  local input_fn=$2
-  local output_fn=$3
+  local input_fn=$1
+  local output_fn=$2
 
-  if [[ -f "${IN_DIR}/${SUB_ID}/${input_fn}" ]]; then  
-    apptainer run --cleanenv --contain \
-      --bind "${IN_DIR}:/input" --bind "${OUT_DIR}:/output" \
-      --pwd / "${SYNTHSEG_SIF}" \
-      --i "/input/${SUB_ID}/${input_fn}" \
-      --o "/output/${SUB_ID}/${output_fn}" \
-      --threads "${NUM_THREADS}"
-  fi
+  blt_run_synthseg ${input_fn} ${output_fn} ${NUM_THREADS}
 }
 
 
@@ -99,15 +78,22 @@ function run_synthseg
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
 
+setup_environment "$@"
 
 IDX=$1
 if [[ ${IDX} -eq 0 ]]; then
   prep_dir
 else
   SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
-  
-  run_synthseg "T1" "$T1_FN" "T1_synthseg.nii.gz"
-  run_synthseg "FLAIR" "$FL_FN" "FLAIR_synthseg.nii.gz"
+
+  if [[ -f ${IN_DIR}/${SUB_ID}/${T1_FN} ]]; then
+    run_synthseg ${IN_DIR}/${SUB_ID}/${T1_FN} ${OUT_DIR}/${SUB_ID}/T1_synthseg.nii.gz
+  fi
+
+  if [[ -f ${IN_DIR}/${SUB_ID}/${FL_FN} ]]; then
+    run_synthseg ${IN_DIR}/${SUB_ID}/${FL_FN} ${OUT_DIR}/${SUB_ID}/FLAIR_synthseg.nii.gz
+  fi
+
 fi
 
 #-------------------------------------------------------------------------------

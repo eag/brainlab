@@ -15,19 +15,20 @@ function usage()
   echo ""
   echo "Usage:"
   echo "  $(basename $0) <input_fn> <output_fn> <num_threads> [options]"
+  echo ""
 }
 
-function config()
+function setup_environment()
 {
-  INPUT_FN=$1
-  OUTPUT_FN=$2
-  NUM_THREADS=$3;
-  OPTIONS="${@:4}"
-
   if [[ $# -lt 3 ]]; then
     usage
     exit 1
   fi
+
+  INPUT_FN=$1
+  OUTPUT_FN=$2
+  NUM_THREADS=$3;
+  OPTIONS=("${@:4}")
 
   if [[ -z "${MODULEPATH}" ]]; then
     echo "using apptainer/singularity on path"
@@ -61,25 +62,30 @@ function run_synthseg()
   local in_file=$(basename "${abs_input}")
   local out_file=$(basename "${abs_output}")
 
-  if [[ -f "${abs_input}" ]]; then  
-    apptainer run --cleanenv --contain \
-      --bind "${in_dir}:/input" --bind "${out_dir}:/output" \
-      --pwd / "${SYNTHSEG_SIF}" \
-      --i "/input/${in_file}" \
-      --o "/output/${out_file}" \
-      --threads "${NUM_THREADS}" \
-      ${OPTIONS}
-  else
-    echo "ERROR: Input file '${input_fn}' not found"
+  if [[ ! -f "${abs_input}" ]]; then
+    echo "ERROR: input file '${abs_input}' not found"
     exit 1
   fi
+
+  if [[ ! -d "${out_dir}" ]]; then
+    echo "ERROR: output directory '${out_dir}' not found"
+    exit 1
+  fi
+
+  apptainer run --cleanenv --contain \
+    --bind "${in_dir}:/input" --bind "${out_dir}:/output" \
+    --pwd / "${SYNTHSEG_SIF}" \
+    --i /input/${in_file} \
+    --o /output/${out_file} \
+    --threads "${NUM_THREADS}"\
+    "${OPTIONS[@]}"
 }
 
 #-------------------------------------------------------------------------------
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
 
-config "$@"
+setup_environment "$@"
 run_synthseg
 
 #-------------------------------------------------------------------------------

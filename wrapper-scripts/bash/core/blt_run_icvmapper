@@ -3,89 +3,101 @@
 #===============================================================================
 ### REQUIREMENTS ###
 #===============================================================================
-
-# BRAINLAB_DIR and BLT_CONTAINER_DIR defined
-# FSL (cpgeom)
-# apptainer (or singularity symlinked to apptainer)
+# BRAINLAB_DIR and BLT_CONTAINER_DIR must be defined
+# Requires FSL (cpgeom), and apptainer (or singularity linked to apptainer)
 
 #-------------------------------------------------------------------------------
-### USAGE ###
+### FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
-if [[ $# -lt 2 ]]; then
+function usage()
+{
   echo ""
   echo "Usage:"
-  echo "  $(basename $0) <OUT_DIR> <T1_IMAGE> [ICVMAPPER_OPTS]"
-  echo "Example:"
-  echo "  $(basename $0) SUB_DIR T1.nii.gz -b --thr 0.4"
+  echo "  $(basename "$0") <OUT_DIR> <T1_IMAGE> [ICVMAPPER_OPTS]"
   echo "" 
-  exit 1
-fi
+}
 
-#-------------------------------------------------------------------------------
-### CONFIG ###
-#-------------------------------------------------------------------------------
-
-OUT_DIR=$1
-T1=$2
-ICVMAPPER_OPTS=${@:3}
-
-for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
-  if [[ -z "${!var}" ]]; then
-    echo "ERROR: $var not set"
+function setup_environment()
+{
+  if [[ $# -lt 2 ]]; then
+    usage
     exit 1
   fi
-done
 
-if [[ -z "${MODULEPATH}" ]]; then
- echo "using fsl/apptainer on path"
-else
-  module --force purge
-  module load StdEnv/2020
-  module load apptainer/1.2.4
-  module load gcc/9.3.0
-  module load fsl/6.0.4
-fi
+  OUT_DIR=$1
+  T1_IMAGE=$2
+  ICVMAPPER_OPTS="${@:3}"
 
-export PATH=${PATH}:${BRAINLAB_DIR}/core-tools/bash
+  for var in BRAINLAB_DIR BLT_CONTAINER_DIR; do
+    if [[ -z "${!var:-}" ]]; then
+      echo "ERROR: $var not set"
+      exit 1
+    fi
+  done
 
-ICVMAPPER_SIF="${BLT_CONTAINER_DIR}/icvmapper.sif"
-if [[ ! -f ${ICVMAPPER_SIF} ]]; then
-  echo "ERROR: ${ICVMAPPER_SIF} not found"
-  exit 1
-fi
+  if [[ ! -f "$T1_IMAGE" ]]; then
+    echo "ERROR: T1 image '$T1_IMAGE' not found"
+    exit 1
+  fi
 
+  if [[ -z "${MODULEPATH:-}" ]]; then
+    echo "Using Apptainer/FSL on path"
+  else
+    module --force purge
+    module load StdEnv/2020
+    module load apptainer/1.2.4
+    module load gcc/9.3.0
+    module load fsl/6.0.4
+  fi
+
+  export PATH="${PATH}:${BRAINLAB_DIR}/core-tools/bash"
+
+  ICVMAPPER_SIF="${BLT_CONTAINER_DIR}/icvmapper.sif"
+  if [[ ! -f "${ICVMAPPER_SIF}" ]]; then
+    echo "ERROR: ${ICVMAPPER_SIF} not found"
+    exit 1
+  fi
+}
+
+function run_icvmapper()
+{
+  local abs_out=$(realpath -m "${OUT_DIR}")
+  mkdir -p "${abs_out}"
+
+  local tmp_dir=$(blt_create_tmpdir "${abs_out}" tmp_icv)
+  if [[ $? -ne 0 || -z "${tmp_dir}" ]]; then
+    echo "ERROR: bltCreateTmpDir failed"
+    exit 1
+  fi
+
+  echo "Temporary directory: ${tmp_dir}"
+
+  cp "${T1_IMAGE}" "${tmp_dir}/T1.nii.gz"
+
+  apptainer exec --cleanenv --contain \
+    --bind "${tmp_dir}:/data" \
+    "${ICVMAPPER_SIF}" icvmapper seg_icv \
+    -t1 /data/T1.nii.gz \
+    -o /data/HfB_icvmapper.nii.gz \
+    ${ICVMAPPER_OPTS}
+
+  cp "${tmp_dir}/HfB_icvmapper.nii.gz" "${abs_out}/"
+
+  cp "$(find "${tmp_dir}" -name "*pred_prob.nii.gz")" \
+    "${abs_out}/HfB_icvmapper_prob.nii.gz"
+
+  fslcpgeom "${T1_IMAGE}" "${abs_out}/HfB_icvmapper_prob.nii.gz"
+  fslcpgeom "${T1_IMAGE}" "${abs_out}/HfB_icvmapper.nii.gz"
+
+  rm -rf "${tmp_dir}"
+}
 
 #-------------------------------------------------------------------------------
 ### PROCESSING ###
 #-------------------------------------------------------------------------------
 
-TMP_DIR=$(bltCreateTmpDir ${OUT_DIR} tmp_icv)
-
-if [[ $? -ne 0 ]]; then
-  echo "ERROR: bltCreateTmpDir failed"
-  exit 1
-fi
-echo ${TMP_DIR}
-
-cp ${T1} ${TMP_DIR}/T1.nii.gz
-
-apptainer exec --cleanenv --contain \
-  --bind ${TMP_DIR}:/data  \
-  ${ICVMAPPER_SIF} icvmapper seg_icv \
-  -t1 /data/T1.nii.gz \
-  -o /data/icvHfB.nii.gz \
-  ${ICVMAPPER_OPTS}
-  
-cp ${TMP_DIR}/icvHfB.nii.gz ${OUT_DIR}/
-
-cp $(find ${TMP_DIR} -name "*pred_prob.nii.gz") \
-  ${OUT_DIR}/icvHfB_prob.nii.gz
-  
-fslcpgeom ${T1} ${OUT_DIR}/icvHfB_prob.nii.gz
-fslcpgeom ${T1} ${OUT_DIR}/icvHfB.nii.gz  
-
-rm -rf ${TMP_DIR}
+setup_environment "$@"
+run_icvmapper
 
 #-------------------------------------------------------------------------------
-
