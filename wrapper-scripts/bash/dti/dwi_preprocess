@@ -238,7 +238,7 @@ run_degibbs()
     mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
 }
 
-run_dwi_preprocessing
+run_dwi_preprocessing()
 {
   log "preprocessing DWI"
 
@@ -249,7 +249,7 @@ run_dwi_preprocessing
     "${OUT_BASE_DIR}/dwi_denoised_degibbs.mif"
 }
 
-run_rpe_preprocessing
+run_rpe_preprocessing()
 {
   ### preprocess rpe_b0, if available (scenario 2) ###
   if [[ -n "${RPE_B0_NII}" ]]; then
@@ -273,15 +273,26 @@ run_rpe_preprocessing
 
 run_dwipreproc_smart()
 {
-  local input="$1"
-  local output="$2"
+  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
+  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
 
   if [[ -n "${RPE_DWI_NII}" ]]; then
     # scenario 3
     echo "TODO: implement scenario 3"
   elif [[ -n "${RPE_B0_NII}" ]]; then
     # scenario 2
-    echo "TODO: implement scenario 2"
+    log "Running dwifslpreproc for RPE B0 (scenario 2)"
+    dwifslpreproc ${input} ${output} \
+      -rpe_header \
+      -se_epi ${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif -align_seepi \
+      -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
+      -eddyqc_all eddyqc_dir \
+      -info \
+      -scratch ${HOME}/tmp/junk \
+      -nocleanup \
+      -nthreads "${THREADS}"
+
+      #TODO FIX scratch dir 
   else
     # scenario 1
     echo "TODO: implement"
@@ -313,7 +324,7 @@ main()
   run_rpe_preprocessing
 
   ### run core dwi preprocessing ###
-  #run_dwipreproc_smart  
+  run_dwipreproc_smart  
 
   
 
