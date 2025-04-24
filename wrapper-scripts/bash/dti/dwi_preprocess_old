@@ -1,0 +1,168 @@
+#!/bin/bash
+set -euo pipefail
+
+#===============================================================================
+### REQUIREMENTS ###
+#===============================================================================
+
+# MRTRIX
+
+
+#-------------------------------------------------------------------------------
+### USAGE ###
+#-------------------------------------------------------------------------------
+
+### ###
+
+#-------------------------------------------------------------------------------
+### VARIABLES ###
+#-------------------------------------------------------------------------------
+
+SUB_ID="BCSA1F001"
+IN_DIR="${HOME}/tmp/test_datasets/dti/leducq/organized"
+OUT_DIR="${HOME}/tmp/test_datasets/dti/leducq/derivatives/dti"
+LOG_FN="${OUT_DIR}/logs/preproc_${SUB_ID}.log"
+DWI_AP_PFX="DTI_AP"
+DWI_PA_PFX="DTI_PA"
+
+THREADS=6
+
+#-------------------------------------------------------------------------------
+### CONFIG ###
+#-------------------------------------------------------------------------------
+
+function setup_environment
+{}
+  ### standard variables ###
+  LIST_DIR=${OUT_DIR}/lists
+  LIST_FN=${LIST_DIR}/subject_list.txt
+
+  DWI_AP=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.nii.gz
+  BVAL=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bval
+  BVEC=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bvec
+  JSON_AP=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
+  DWI_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.nii.gz
+  JSON_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
+
+  ### checks and paths ###
+  if [[ $# -ne 1 ]]; then
+    echo "USAGE ERROR"
+    exit 1
+  fi
+}
+
+#-------------------------------------------------------------------------------
+### FUNCTIONS ###
+#-------------------------------------------------------------------------------
+
+function prep_dir
+{
+  echo "Preparing directories..."
+
+  if [[ ! -d ${IN_DIR} ]]; then
+    echo "Input directory does not exist: ${IN_DIR}"
+    exit 1
+  fi
+
+  mkdir -p ${LIST_DIR}
+  mkdir -p ${OUT_DIR}
+
+  rm -f ${LIST_FN}
+  ls -d ${IN_DIR}/* | grep -Ev "lists|logs" > ${LIST_FN}
+  while read -r line; do
+    SUB_ID=$(echo ${line} | cut -d'/' -f1)
+    mkdir -p ${OUT_DIR}/${SUB_ID}
+  done < ${LIST_FN}
+}
+
+function run_dwi_preprocess()
+{
+  mkdir -p ${OUT_DIR}/logs
+  rm -f ${LOG_FN}
+
+  log() { echo "[$(date '+%F %T')] $*" | tee -a "${LOG_FN}"; }
+  log "Starting DTI pipeline for ${SUB_ID}"
+
+  
+  HAS_PA=false
+  [[ -f "$DWI_PA" && -s "$DWI_PA" ]] && HAS_PA=true
+
+  if [[ -f "$JSON_AP" ]]; then
+    PE_DIR=$(jq -r '.PhaseEncodingDirection // empty' "$JSON_AP")
+    READOUT=$(jq -r '.TotalReadoutTime // empty' "$JSON_AP")
+    [[ -z "$PE_DIR" ]] && PE_DIR=${DEFAULT_PE_DIR}
+    [[ -z "$READOUT" ]] && READOUT=${DEFAULT_READOUT}
+    log "Using PE direction: $PE_DIR"
+    log "Using Readout Time: $READOUT"
+  fi
+
+
+  log "Converting DWI to .mif with gradients"
+  mrconvert \
+    "$DWI_AP" "${OUT_DIR}/dwi.mif" -fslgrad "$BVEC" "$BVAL" -force
+
+  log "Running dwidenoise"
+  dwidenoise \
+    "${OUT_DIR}/dwi.mif" "${OUT_DIR}/dwi_denoise.mif" \
+    -nthreads $THREADS -force
+  
+  log "Running mrdegibbs"
+  mrdegibbs \
+    "${OUT_DIR}/dwi_denoise.mif" "${OUT_DIR}/dwi_degibbs.mif" \
+    -nthreads $THREADS -force
+
+  log "Exporting gradients and image for compatibility"
+  mrconvert \
+    "${OUT_DIR}/dwi_degibbs.mif" "${OUT_DIR}/dwi_degibbs.nii.gz" \
+    -export_grad_fsl "${OUT_DIR}/dwi_degibbs.bvec" "${OUT_DIR}/dwi_degibbs.bval" -force
+
+  if ${HAS_PA}; then
+    log "Extracting b0s for AP and PA"
+    dwidenoise "$DWI_PA" "${OUT_DIR}/dwi_pa_denoise.nii.gz" -force -nthreads $THREADS
+    mrdegibbs "${OUT_DIR}/dwi_pa_denoise.nii.gz" "${OUT_DIR}/dwi_pa_degibbs.nii.gz" -force -nthreads $THREADS
+
+    dwiextract "${OUT_DIR}/dwi_degibbs.mif" - -bzero | mrmath - mean "${OUT_DIR}/b0_ap.nii.gz" -axis 3 -force
+    dwiextract "${OUT_DIR}/dwi_pa_degibbs.nii.gz" - -bzero | mrmath - mean "${OUT_DIR}/b0_pa.nii.gz" -axis 3 -force
+
+    fslmerge -t "${OUT_DIR}/b0_pair.nii.gz" "${OUT_DIR}/b0_ap.nii.gz" "${OUT_DIR}/b0_pa.nii.gz"
+
+    log "Running dwifslpreproc with topup (b0_pair)"
+    dwifslpreproc \
+      "${OUT_DIR}/dwi_degibbs.mif" "${OUT_DIR}/dwi_preproc.mif" \
+      -pe_dir $PE_DIR \
+      -readout_time $READOUT \
+      -se_epi "${OUT_DIR}/b0_pair.nii.gz" \
+      -eddy_options " --repol" \
+      -nthreads $THREADS -force
+  else
+    log "No PA image: running dwifslpreproc without topup"
+    dwifslpreproc \
+      "${OUT_DIR}/dwi_degibbs.mif" "${OUT_DIR}/dwi_preproc.mif" \
+      -pe_dir $PE_DIR \
+      -readout_time $READOUT \
+      -eddy_options " --repol" \
+      -nthreads $THREADS -force
+  fi
+
+  log "Finished preprocessing"
+}
+
+
+#-------------------------------------------------------------------------------
+### PROCESSING ###
+#-------------------------------------------------------------------------------
+
+setup_environment "$@"
+
+IDX=$1
+SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
+if ${IDX -eq 0}; then
+  prep_dir
+else
+  run_dwi_preprocess
+fi
+
+#-------------------------------------------------------------------------------
+
+
+

@@ -1,0 +1,1416 @@
+#!/bin/bash
+# Authors: Min Su (Peter) Kang & Julie Ottoy
+# This workflow uses FSL and Mrtrix for DWI/DTI pre/processing and analysis. 
+# REQUIREMENTS:
+#             - Mrtrix 3.0.1 or higher
+#             - FSL 6.0 or higher
+#             - ANTs
+# We acknowledge the great resources from the Mrtrix community, BATMAN tutorial, and Dr. Andrew Jahn\'s Youtube vidoes.
+#
+#
+# This version is for testing on SRI local servers (Cerebro) -A.N. 2021-11-05
+
+#Long usage function
+function usage() {
+echo '''
+
+
+DWI_preproc.sh will preprocess your DWI data given your information such as 
+file format, acquisition direction, PE design, PE direction, etc. 
+The details of each option from this script can be found below. 
+
+
+
+Important Note: The --PE_des 2 option is currently not fully supported.
+
+
+
++++ General +++
+  -l/--group: Group name or Project name.
+  Specify your group corresponding to your subject or project. 
+
+
+  -m/--id: Subject ID. 
+  Specify your subject ID. 
+
+
+  -n/--clobber: Overwriting
+  To overwrite your outputs, specifiy with -n or --clobber option. 
+
+
++++ Required! +++
+	-a/--input_file: raw DWI input file.
+    Specify your raw DWI input file (.nii.gz) or raw DWI DICOM directory here. 
+
+    If your input data are in Nifti format, your corresponding bvec and bval file should have 
+    the same name and be in the same directory as your raw DWI input with the extension 
+    .bvec and .bval, respectively.
+   
+    If you have any extra data related to your session such as a reversed PE b0 scan or 
+    full reversed PE DWI scan, you can specify them using --b0-rev and --dwi_rev, respectively. 
+    For more information, please refer to the description below. 
+
+
+  -b/--output_dir: Output directory
+    Specify where you want your output to be saved. 
+
+
+  -c/--file_format: Data extension.
+    Specify which file format you are inputing. Either as DICOM or NIFTI. 
+
+
+	-d/--acq_dir: Acquisition direction.
+  Specify your acquisition direction. You can specify as either Axial, Coronal, or Sagittal. 
+  ! It is important that this is different from PE direction!
+
+
+  -e/--shells: How many shells are present in your DWI data. 
+  Specify whether your acquisition was a single-shell or multi-shell acquisition. 
+  You can specify as either Single for single-shell or Multi for multi-shell. 
+
+  
+  -f/--PE_des: Phase encoding design.
+  Specifiy whether you have acquired DWI alone, DWI + reversed b0, or DWI + reversed DWI data. 
+  If you only have DWI data, then specifiy with 0.
+  If you have DWI + reversed b0 data, then specifiy with 1.
+  If you have DWI + reversed DWI data, then specifiy with 2. 
+
+
+	-g/--PE_dir: Phase encoding direction. 
+  Specify your phase encoding direction. You can find some common examples below. 
+  
+  Examples. 
+  Right -> Left: RL.
+  Posterior -> Anterior: PA.
+  Inferior -> Superior: IS. 
+
+  For the complete list and option, please, refer to the Mrtrix documentation related to
+  dwifslpreproc.
+
+
+  -i/--Out_Thres: Outlier threshold
+  Specifiy the outlier threshold in %. For example, if you put 20% as a threshold, then put --Out_Thres 20.
+  This option will remove the frame when there is equal or greater than the specified % of its slices identified as outliers
+  following the distortion, motion, and eddy correction. The summary of the outliers can be found in dwifslpreproc directory. 
+
+  Default value here is 20%.
+
+
++++ Optional +++
+  -j/--dwi_rev: Reversed DWI data.
+  Specify the reversed PE DWI data if you have acquired.
+
+
+  -k/--b0_rev: Reversed b0 data.
+  Specify the reversed PE b0 data if you have acquired.
+
+
+  --type2_err: Type 2 error (sensitivity). 
+  This option will set the type 2 error (false negative) constant instead of 
+  type 1 error (false positive), which is the default. 
+
+
+  -h/--help: Detailed description of the script. 
+
+'''
+
+exit 0
+}
+
+#Short usage function
+function shortusage() {
+echo '''
+Common usage example:
+DWI_preproc.sh --input_file dwi.nii.gz --output_dir /output/ --file_format NIFTI --acq_dir Axial --shells Multi --PE_des 1 --PE_dir PA --Out_Thres 10 --b0_rev b0_rev.nii.gz
+'''
+exit 0
+}
+
+
+if [ $# -lt 1 ] ; then  
+	shortusage
+fi
+
+# Translate long options to short
+for arg
+	do
+	delim=""
+    case "${arg}" in
+
+      ### Options ###
+      --input_file) args="${args}-a ";;
+      --output_dir) args="${args}-b ";;
+      --nv_gpu) args="${args}-r ";;
+      --clobber) args="${args}-c ";;
+      --id) args="${args}-d ";;
+      --group) args="${args}-e ";;      
+      --t1) args="${args}-f ";;
+      --t1_mask) args="${args}-g ";;
+      --t1_freesurfer) args="${args}-u ";;
+      --file_format) args="${args}-i ";;
+      --acq_dir) args="${args}-j ";;
+      --shells) args="${args}-k ";;
+      --PE_des) args="${args}-l ";;
+      --PE_dir) args="${args}-m ";;
+      --readout_time) args="${args}-q ";;
+      --Out_Thres) args="${args}-n ";;  
+      --rev_dat) args="${args}-o ";;
+      --slice_MC) args="${args}-p ";;
+      --use_header) args="${args}-v ";;      
+      --type2_err) args="${args}-t ";;
+      --voxsize) args="${args}-s ";;
+
+
+      ### Help! ###
+      --help) args="${args}-h ";;
+		
+		#pass through anything else.
+       *) [[ "${arg:0:1}" == "-" ]] || delim="\""
+           args="${args}${delim}${arg}${delim} ";;
+    esac
+done
+
+
+# Reset the translated args
+eval set -- "${args}"
+
+
+
+
+#---Assign variables
+#Requires that each letter assigned above is in the getopts and opt lists. Options intended to be followed by an argument should be followed by a colon in the getopts list and "$OPTARG" in the opt list. 
+while getopts "htvcra:b:d:e:f:g:i:j:k:l:m:n:o:p:q:s:u:" opt; do
+	case "${opt}" in
+	 	
+  a)
+		input_file=$OPTARG ;;
+    
+  b)
+		output_dir=$OPTARG ;;
+    	
+	r)
+		nv_gpu=nv_gpu ;;
+
+  c)
+		clobber=clobber ;;
+    
+  d)
+		id=$OPTARG ;;    
+  
+  e)
+		group=$OPTARG ;;
+  
+  f)
+		t1=$OPTARG ;;
+    
+  g)
+		t1_mask=$OPTARG ;;
+  
+  u)
+		t1_freesurfer=$OPTARG ;;
+
+  i)
+		file_format=$OPTARG ;;
+
+	j)
+		acq_dir=$OPTARG ;;
+
+  k)
+		shells=$OPTARG ;;
+  
+  l)
+		PE_des=$OPTARG ;;
+
+	m)
+		PE_dir=$OPTARG ;;
+
+  q)
+    readout_time=$OPTARG ;;
+
+  n)
+		Out_Thres=$OPTARG ;;
+
+  o)
+		rev_dat=$OPTARG ;;
+    
+  p)
+    slice_MC="$OPTARG" ;;
+  
+  v)
+    use_header=use_header ;;
+  
+  t)
+    type2_err=type2_err ;;
+
+  s)
+    voxsize=$OPTARG ;;
+
+  h)	usage ;;
+	esac
+done
+shift $(( OPTIND - 1 ))
+
+
+
+
+
+
+
+
+###         Functions           ###
+## command run
+function cmd_run()
+{
+
+  local input="$1";
+  local output="$2"
+  local msg="$3";
+  local fun="${@:4}"; 
+
+  if [[ ! -f "${input}" ]]; then 
+  
+    printf "\n ${msg} \n"
+    printf "cannot be done... \n"
+    printf "\n The input file ('${input}') does not exist. \n"
+    exit 5
+
+
+  elif [[ ! -f "${output}" ]]; then
+
+    printf "\n '${msg}' \n";
+    echo "$fun";
+    eval "${fun}";
+
+  elif [[ -n "${clobber}" ]]; then 
+
+    printf "\n '${msg}' \n";
+    printf "\n Overwriting... \n";
+    echo "$fun";        
+    eval "${fun}";
+
+  else
+
+    printf "\n '${msg}' \n";
+    printf "\n '${output}' already exists ... skipping \n";
+
+  fi ;
+
+}
+
+
+
+
+
+## dicom run
+function dcm_run()
+{
+
+  local input="$1";
+  local output="$2"
+  local msg="$3";
+  local fun="${@:4}"; 
+
+  if [[ ! -d "${input}" ]]; then 
+  
+    printf "\n ${msg} \n"
+    printf "cannot be done... \n"
+    printf "\n The input file ('${input}') does not exist. \n"
+    exit 5
+
+
+  elif [[ ! -f "${output}" ]]; then
+
+    printf "\n '${msg}' \n";
+    echo "$fun";
+    eval "${fun}";
+
+  elif [[ -n "${clobber}" ]]; then 
+
+    printf "\n '${msg}' \n";
+    printf "\n Overwriting... \n";
+    echo "$fun";        
+    eval "${fun}";
+
+  else
+
+    printf "\n '${msg}' \n";
+    printf "\n '${output}' already exists ... skipping \n";
+
+  fi ;
+
+}
+
+
+
+
+
+
+
+
+
+
+
+###         Get Ready           ###
+echo "+++ Let's get ready for DWI Preprocessing +++"
+echo $(date)
+echo
+
+
+
+
+
+###         Sources         ###
+export PATH=/scratch/pkang/bin:$PATH
+
+
+
+
+
+###         Output directory & file structure           ###
+
+mkdir -vp "${output_dir}/${group}/${id}/input"
+mkdir -vp "${output_dir}/${group}/${id}/dwipreprocessed/eddy_quad_qc"
+mkdir -vp "${output_dir}/${group}/${id}/dwipreprocessed/scratch"
+mkdir -vp "${output_dir}/${group}/${id}/dwipreprocessed/regrid_${voxsize}"
+mkdir -vp "${output_dir}/${group}/${id}/dwispace_masks"
+mkdir -vp "${output_dir}/${group}/${id}/dwi2t1_transforms"
+mkdir -vp "${output_dir}/${group}/${id}/dwi2t1_resampled"
+mkdir -vp "${output_dir}/${group}/${id}/tmp_t1process"
+
+
+
+
+
+
+###         Variable assignment         ###
+
+input_dir="${output_dir}/${group}/${id}/input"
+preproc_dir="${output_dir}/${group}/${id}/dwipreprocessed"
+preproc_eddyQC="${output_dir}/${group}/${id}/dwipreprocessed/eddy_quad_qc"
+preproc_scratch="${output_dir}/${group}/${id}/dwipreprocessed/scratch"
+regrid_dir="${output_dir}/${group}/${id}/dwipreprocessed/regrid_${voxsize}"
+dwispace_masks_dir="${output_dir}/${group}/${id}/dwispace_masks"
+dwi2t1_transforms_dir="${output_dir}/${group}/${id}/dwi2t1_transforms"
+dwi2t1_resampled_dir="${output_dir}/${group}/${id}/dwi2t1_resampled"
+t1_proc_dir="${output_dir}/${group}/${id}/tmp_t1process"
+
+
+
+
+
+
+
+
+###         Check points            ###
+# nv-gpu
+if [[ -n "${nv_gpu}" ]]; then
+  nv_gpu_arg="--nv_gpu"
+
+fi
+
+
+# Clobber
+if [[ -n "${clobber}" ]]; then
+  force_run="-force"
+  clobber_arg="--clobber"
+
+fi
+
+
+# t1
+
+if [[ ! -f "${t1}" ]]; then
+  echo "ERROR: Your T1 input file does not exist!"
+  exit 5
+
+fi
+
+
+#   t1 mask
+if [[ ! -f "${t1_mask}" ]]; then
+  echo "ERROR: Your T1 mask file does not exist!"
+  exit 5
+
+fi
+
+
+# File conversion
+if [[ "${file_format^^}" == "DICOM" ]]; then
+
+  # Input file
+
+  if [[ ! -d "${input_file}" ]]; then
+    echo "ERROR: Your DWI input file/folder does not exist!"
+    exit 5
+
+  fi
+
+  dcm_run ${input_file}/ \
+  "${input_dir}"/dwi.mif \
+  "File conversion." \
+  mrconvert ${input_file}/ \
+  "${input_dir}"/dwi.mif \
+  -info ${force_run}
+
+
+elif [[ "${file_format^^}" == "NIFTI" ]]; then
+
+  # Input file
+
+  if [[ ! -f "${input_file}" ]]; then
+    echo "ERROR: Your DWI input file/folder does not exist!"
+    exit 5
+
+  fi
+
+  input_file_base=$(basename ${input_file%.nii*})
+  input_file_root=$(dirname ${input_file})
+
+  cmd_run ${input_file_root}/${input_file_base}.bvec \
+  "${input_dir}"/dwi.mif \
+  "File conversion." \
+  mrconvert -fslgrad ${input_file_root}/${input_file_base}.bvec \
+  ${input_file_root}/${input_file_base}.bval \
+  ${input_file} "${input_dir}"/dwi.mif \
+  -info ${force_run}
+
+fi
+
+
+
+# Acquisition direction 
+if [[ "${acq_dir^^}" == "AXIAL" ]]; then
+
+  ax_dir="0,1"
+
+elif [[ "${acq_dir^^}" == "CORONAL" ]]; then
+
+  ax_dir="0,2"
+
+elif [[ "${acq_dir^^}" == "SAGITTAL" ]]; then
+
+  ax_dir="1,2"
+
+fi
+ 
+
+#=================================================================================================================================
+#=================================================================================================================================
+
+
+# Checking how many frames & x-, y-, and z-axis are present in DWI data and select the appropriate topup and eddy option.
+num_x_dim=$(mrinfo -size "${input_dir}"/dwi.mif | awk '{print $1}')
+num_y_dim=$(mrinfo -size "${input_dir}"/dwi.mif | awk '{print $2}')
+num_z_dim=$(mrinfo -size "${input_dir}"/dwi.mif | awk '{print $3}')
+num_angles=$(mrinfo -size "${input_dir}"/dwi.mif | awk '{print $4}')
+
+
+if [[ "${num_angles}" -ge "60" ]]; then
+  slm_option="--slm=quadratic"
+else
+  slm_option="--slm=linear"
+fi
+
+# PE design 
+#=================================================================================================================================
+if [[ "${PE_des}" -eq "0" && -z "${use_header}" ]]; then
+  pe_dir_run="-pe_dir"
+  pe_dir_arg="--PE_dir"
+  rpe="-rpe_none"
+  # readout time
+  if [[ -n "${readout_time}" ]]; then
+    readout_time_run="-readout_time"
+  fi
+
+  # eddy options
+  if [[ -n "${slice_MC}" ]]; then
+  slspec_arg="--slice_MC"
+  slspec_run="-eddy_slspec"
+  slspec="${slice_MC}"
+
+    # slspec
+    if [[ ! -f "${slspec}" ]]; then
+      printf "ERROR: Your slspec file does not exist!"
+      exit 5
+
+
+    fi
+
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 --verbose"
+
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 ${false_neg_const} --data_is_shelled --verbose"
+
+
+    fi  
+
+  else
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --verbose"
+
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --data_is_shelled --verbose"
+    fi  
+  fi
+#=================================================================================================================================
+elif [[ "${PE_des}" -eq "1" && -z "${use_header}" ]]; then
+  pe_dir_run="-pe_dir"
+  pe_dir_arg="--PE_dir"
+  rpe="-rpe_pair"
+  b0_rev="${rev_dat}"
+  eddy_estimate_move_by_sus="--estimate_move_by_susceptibility"
+  # readout time
+  if [[ -n "${readout_time}" ]]; then
+    readout_time_run="-readout_time"
+  fi
+
+  ## File conversion ###
+  if [[ "${file_format^^}" == "DICOM" ]]; then
+    dcm_run ${b0_rev}/ \
+    "${input_dir}"/b0_rev.mif \
+    "File conversion." \
+    mrconvert ${b0_rev}/ \
+    "${input_dir}"/b0_rev.mif \
+    -info ${force_run}
+  elif [[ "${file_format^^}" == "NIFTI" ]]; then
+    cmd_run ${b0_rev} \
+    "${input_dir}"/b0_rev.mif \
+    "File conversion." \
+    mrconvert ${b0_rev} "${input_dir}"/b0_rev.mif \
+    -info ${force_run}
+  fi
+
+  # eddy options
+  if [[ -n "${slice_MC}" ]]; then
+  slspec_arg="--slice_MC"
+  slspec_run="-eddy_slspec"
+  slspec="${slice_MC}"
+    # slspec
+    if [[ ! -f "${slspec}" ]]; then
+      printf "ERROR: Your slspec file does not exist!"
+      exit 5
+    fi
+
+
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 --verbose"
+
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 ${false_neg_const} --data_is_shelled --verbose"
+    fi  
+
+  else
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --data_is_shelled --verbose"
+    fi  
+  fi
+#=================================================================================================================================
+elif [[ "${PE_des}" -eq "2" && -z "${use_header}" ]]; then
+  pe_dir_run="-pe_dir"
+  pe_dir_arg="--PE_dir"
+  rpe="-rpe_all"
+  dwi_rev="${rev_dat}"
+  eddy_estimate_move_by_sus="--estimate_move_by_susceptibility"
+  # readout time
+  if [[ -n "${readout_time}" ]]; then
+    readout_time_run="-readout_time"
+  fi
+
+  ## File conversion ###
+  if [[ "${file_format^^}" == "DICOM" ]]; then
+    dcm_run ${dwi_rev}/ \
+    "${input_dir}"/dwi_rev.mif \
+    "File conversion." \
+    mrconvert ${dwi_rev}/ "${input_dir}"/dwi_rev.mif \
+    -info ${force_run}
+
+  elif [[ "${file_format^^}" == "NIFTI" ]]; then
+    dwi_rev_base=$(basename ${dwi_rev%.nii*})
+    dwi_rev_root=$(dirname ${dwi_rev})
+
+    cmd_run ${dwi_rev_root}/${dwi_rev_base}.bval \
+    "${input_dir}"/dwi_rev.mif \
+    "File conversion." \
+    mrconvert -fslgrad ${dwi_rev_root}/${dwi_rev_base}.bvec \
+    ${dwi_rev_root}/${dwi_rev_base}.bval \
+    ${dwi_rev} "${input_dir}"/dwi_rev.mif \
+    -info ${force_run}
+
+  fi
+  # eddy options
+  if [[ -n "${slice_MC}" ]]; then
+  slspec_arg="--slice_MC"
+  slspec_run="-eddy_slspec"
+  slspec="${slice_MC}"
+    # slspec
+    if [[ ! -f "${slspec}" ]]; then
+      printf "ERROR: Your slspec file does not exist!"
+      exit 5
+    fi
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 ${false_neg_const} --data_is_shelled --verbose"
+    fi  
+
+  else
+
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --data_is_shelled --verbose"
+    fi  
+  fi
+
+#=================================================================================================================================
+#=================================================================================================================================
+#====use header====
+
+elif [[ "${PE_des}" -eq "0" && -n "${use_header}" ]]; then
+  rpe="-rpe_header"
+  use_header_arg="--use_header"
+  # eddy options
+  if [[ -n "${slice_MC}" ]]; then
+  slspec_arg="--slice_MC"
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 ${false_neg_const} --data_is_shelled --verbose"
+    fi  
+  else
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --data_is_shelled --verbose"
+    fi  
+  fi
+#=================================================================================================================================
+elif [[ "${PE_des}" -eq "1" && -n "${use_header}" ]]; then
+  use_header_arg="--use_header"
+  rpe="-rpe_header"
+  b0_rev="${rev_dat}"
+  eddy_estimate_move_by_sus="--estimate_move_by_susceptibility"
+
+  ## File conversion ###
+  if [[ "${file_format^^}" == "DICOM" ]]; then
+
+    dcm_run ${b0_rev}/ \
+    "${input_dir}"/b0_rev.mif \
+    "File conversion." \
+    mrconvert ${b0_rev}/ \
+    "${input_dir}"/b0_rev.mif \
+    -info ${force_run}
+
+  elif [[ "${file_format^^}" == "NIFTI" ]]; then
+    cmd_run ${b0_rev} \
+    "${input_dir}"/b0_rev.mif \
+    "File conversion." \
+    mrconvert ${b0_rev} "${input_dir}"/b0_rev.mif \
+    -info ${force_run}
+
+  fi
+
+  # eddy options
+  if [[ -n "${slice_MC}" ]]; then
+  slspec_arg="--slice_MC"
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 ${false_neg_const} --data_is_shelled --verbose"
+    fi  
+
+  else
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --data_is_shelled --verbose"
+    fi  
+
+  fi
+#=================================================================================================================================
+elif [[ "${PE_des}" -eq "2" && -n "${use_header}" ]]; then
+  use_header_arg="--use_header"
+  rpe="-rpe_header"
+  dwi_rev="${rev_dat}"
+  eddy_estimate_move_by_sus="--estimate_move_by_susceptibility"
+
+  ## File conversion ###
+
+  if [[ "${file_format^^}" == "DICOM" ]]; then
+
+    dcm_run ${dwi_rev}/ \
+    "${input_dir}"/dwi_rev.mif \
+    "File conversion." \
+    mrconvert ${dwi_rev}/ "${input_dir}"/dwi_rev.mif \
+    -info ${force_run}
+
+  elif [[ "${file_format^^}" == "NIFTI" ]]; then
+    dwi_rev_base=$(basename ${dwi_rev%.nii*})
+    dwi_rev_root=$(dirname ${dwi_rev})
+
+    cmd_run ${dwi_rev_root}/${dwi_rev_base}.bval \
+    "${input_dir}"/dwi_rev.mif \
+    "File conversion." \
+    mrconvert -fslgrad ${dwi_rev_root}/${dwi_rev_base}.bvec \
+    ${dwi_rev_root}/${dwi_rev_base}.bval \
+    ${dwi_rev} "${input_dir}"/dwi_rev.mif \
+    -info ${force_run}
+
+  fi
+#=================================================================================================================================
+
+  # eddy options
+  if [[ -n "${slice_MC}" ]]; then
+  slspec_arg="--slice_MC"
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --mporder=8 --s2v_niter=8 ${false_neg_const} --data_is_shelled --verbose"
+    fi  
+  else
+    if [[ "${shells^}" == "Single" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --verbose"
+    elif [[ "${shells^}" == "Multi" ]]; then
+      fsl_eddy_options=" --repol ${slm_option} ${eddy_estimate_move_by_sus} --data_is_shelled --verbose"
+    fi  
+  fi
+fi
+
+# Reverse data input argument
+if [[ -n "${rev_dat}" ]]; then
+  rev_dat_arg="--rev_dat"
+fi
+
+
+# error type for slice_MC
+if [[ -n "${type2_err}" ]]; then
+  false_neg_const="--ol_ec=2"
+  type2_err_arg="--type2_err"
+fi
+
+# readout time
+if [[ -n "${readout_time}" ]]; then
+  readout_time_arg="--readout_time"
+fi
+
+#=================================================================================================================================
+#=================================================================================================================================
+
+
+
+###         Input command         ###
+printf "\n\n\n\n\n"
+printf "\n The input command for this job was: \n"
+echo DWI_preproc.sh --id "${id}" --group "${group}" \
+--input_file "${input_file}" --output_dir "${output_dir}" --t1 "${t1}" \
+--t1_mask "${t1_mask}" --t1_freesurfer ${t1_freesurfer} --file_format ${file_format} \
+--acq_dir ${acq_dir} --shells ${shells} --PE_des ${PE_des} ${pe_dir_arg} ${PE_dir} ${use_header_arg} \
+--Out_Thres ${Out_Thres} ${readout_time_arg} ${readout_time} ${rev_dat_arg} ${rev_dat} \
+${slspec_arg} ${slice_MC} --voxsize ${voxsize} \
+${type2_err_arg} ${nv_gpu_arg} ${clobber_arg}
+
+
+
+
+
+
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+
+
+
+
+###         Ready, Set, GO! 
+DWI_preproc_start_time=`date +%s`
+printf "\n\n\n\n\n"
+echo "+++ DWI Preprocessing +++"
+echo "$(hostname) is running..."
+echo $(date)
+printf "\n\n\n\n\n"
+
+
+###         DWI Preprocessing           ###
+
+# Denoising
+cmd_run "${input_dir}"/dwi.mif \
+"${preproc_dir}"/dwi_denoised.mif \
+"Denoising." \
+dwidenoise "${input_dir}"/dwi.mif \
+"${preproc_dir}"/dwi_denoised.mif \
+-noise "${preproc_dir}"/dwi_noised.mif \
+-info ${force_run}
+
+# Denoising Residuals
+cmd_run "${preproc_dir}"/dwi_denoised.mif \
+"${preproc_dir}"/dwi_denoising_residuals.mif \
+"Denoising Residuals." \
+mrcalc "${input_dir}"/dwi.mif "${preproc_dir}"/dwi_denoised.mif \
+-subtract "${preproc_dir}"/dwi_denoising_residuals.mif \
+-info ${force_run}
+
+# QC the residuals image.
+
+# Unring gibbs
+cmd_run "${preproc_dir}"/dwi_denoised.mif \
+"${preproc_dir}"/dwi_denoised_degibbs.mif \
+"Unringing Gibbs artifacts." \
+mrdegibbs -axes "${ax_dir}" \
+-info ${force_run} \
+"${preproc_dir}"/dwi_denoised.mif \
+"${preproc_dir}"/dwi_denoised_degibbs.mif
+
+# Unringing Residuals
+cmd_run "${preproc_dir}"/dwi_denoised_degibbs.mif \
+"${preproc_dir}"/dwi_denoised_degibbs_residuals.mif \
+"Unringing Residuals." \
+mrcalc "${preproc_dir}"/dwi_denoised.mif \
+"${preproc_dir}"/dwi_denoised_degibbs.mif \
+-subtract "${preproc_dir}"/dwi_denoised_degibbs_residuals.mif \
+-info ${force_run}
+
+
+# Extracting the first b0 and all the b0 from DWI
+# First b0 frame
+cmd_run ${preproc_dir}/dwi_denoised_degibbs.mif \
+"${preproc_dir}"/dwi_denoised_degibbs_b0_0F.nii.gz \
+"Extracting first b0 frame." \
+"dwiextract -info ${force_run} ${preproc_dir}/dwi_denoised_degibbs.mif - -bzero | \
+mrconvert - -coord 3 0 -axes 0,1,2 - | \
+mrconvert - ${preproc_dir}/dwi_denoised_degibbs_b0_0F.nii.gz ${force_run}"
+
+# All b0 frames
+cmd_run ${preproc_dir}/dwi_denoised_degibbs.mif \
+"${preproc_dir}"/dwi_denoised_degibbs_b0.nii.gz \
+"Extracting all b0 frames." \
+"dwiextract -info ${force_run} ${preproc_dir}/dwi_denoised_degibbs.mif - -bzero | \
+mrconvert - ${preproc_dir}/dwi_denoised_degibbs_b0.nii.gz ${force_run}"
+
+# Motion correction using the first b0 frame as a reference
+cmd_run ${preproc_dir}/dwi_denoised_degibbs_b0.nii.gz \
+${preproc_dir}/dwi_denoised_degibbs_b0_MC.nii.gz \
+"Motion Correction using the first b0 frame." \
+antsMotionCorr -d 3 -v \
+  -t Rigid[0.1] \
+  -m MI[ ${preproc_dir}/dwi_denoised_degibbs_b0_0F.nii.gz, ${preproc_dir}/dwi_denoised_degibbs_b0.nii.gz, 1, 32, Regular, 0.25 ] \
+  -u 1 -e 1 -s 3.0x2.0x1.0x0.0 -f 8x4x2x1 -i 100x50x30x10 -l 1 \
+  -o [ ${preproc_dir}/dwi_denoised_degibbs_b0_MC, ${preproc_dir}/dwi_denoised_degibbs_b0_MC.nii.gz, ${preproc_dir}/dwi_denoised_degibbs_b0_MC_AVG.nii.gz ]
+
+
+### Averaging all the motion corrected b0 frames and convert to .mif
+cmd_run "${preproc_dir}"/dwi_denoised_degibbs_b0_MC.nii.gz \
+"${preproc_dir}"/dwi_denoised_degibbs_b0_MC_AVG.mif \
+"Averaging motion corrected b0 frames." \
+mrmath "${preproc_dir}"/dwi_denoised_degibbs_b0_MC.nii.gz mean \
+"${preproc_dir}"/dwi_denoised_degibbs_b0_MC_AVG.mif -axis 3 -info ${force_run}
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+# distortion, motion, eddy corrections via dwifslpreproc
+if [[ "${PE_des}" -eq "0" ]]; then
+  cmd_run "${preproc_dir}"/dwi_denoised_degibbs.mif \
+  "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+  "distortion, motion, and eddy corrections." \
+  dwifslpreproc "${preproc_dir}"/dwi_denoised_degibbs.mif "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+  -nocleanup -scratch "${preproc_scratch}"/ ${pe_dir_run} ${PE_dir^^} ${rpe} ${readout_time_run} ${readout_time} \
+  -info ${force_run} \
+  -eddyqc_all "${preproc_eddyQC}"/ ${slspec_run} ${slspec} \
+  -eddy_options '"' $(echo ${fsl_eddy_options}) '"'
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+elif [[ "${PE_des}" -eq "1" ]]; then
+  # making preprocessing directory for the reverse PE data
+  mkdir -vp "${preproc_dir}"/rev_dwipreprocessed/
+  rev_dwipreproc_dir="${preproc_dir}/rev_dwipreprocessed"
+
+  # Unring gibbs on the reverse PE data
+  cmd_run ${input_dir}/b0_rev.mif \
+  "${rev_dwipreproc_dir}"/b0_rev_degibbs.nii.gz \
+  "Unringing Gibbs artifacts on rev PE." \
+  "mrdegibbs -axes ${ax_dir} -info ${force_run} ${input_dir}/b0_rev.mif - | \
+  mrconvert - ${rev_dwipreproc_dir}/b0_rev_degibbs.nii.gz ${force_run}"
+
+# Selecting the first frame of reverse PE b0
+  cmd_run "${rev_dwipreproc_dir}"/b0_rev_degibbs.nii.gz \
+  "${rev_dwipreproc_dir}"/b0_rev_degibbs_0F.nii.gz \
+  "Extracting the first b0 frame of rev PE." \
+  mrconvert "${rev_dwipreproc_dir}"/b0_rev_degibbs.nii.gz -coord 3 0 \
+  -axes 0,1,2 "${rev_dwipreproc_dir}"/b0_rev_degibbs_0F.nii.gz ${force_run}
+
+  # Motion correction using the first b0 frame as a reference 
+  cmd_run ${rev_dwipreproc_dir}/b0_rev_degibbs.nii.gz \
+  "${rev_dwipreproc_dir}/b0_rev_degibbs_MC.nii.gz" \
+  "Motion correction on rev PE b0." \
+  antsMotionCorr -d 3 -v \
+  -t Rigid[0.1] \
+  -m MI[ ${rev_dwipreproc_dir}/b0_rev_degibbs_0F.nii.gz, ${rev_dwipreproc_dir}/b0_rev_degibbs.nii.gz, 1, 32, Regular, 0.25 ] \
+  -u 1 -e 1 -s 3.0x2.0x1.0x0.0 -f 8x4x2x1 -i 100x50x30x10 -l 1 \
+  -o [ ${rev_dwipreproc_dir}/b0_rev_degibbs_MC, ${rev_dwipreproc_dir}/b0_rev_degibbs_MC.nii.gz, ${rev_dwipreproc_dir}/b0_rev_degibbs_MC_AVG.nii.gz ]
+
+  # Averaging all the motion corrected b0 frames and convert to .mif
+  cmd_run "${rev_dwipreproc_dir}"/b0_rev_degibbs_MC.nii.gz \
+  "${rev_dwipreproc_dir}"/b0_rev_degibbs_MC_AVG.mif \
+  "Averaging motion corrected rev PE b0." \
+  mrmath "${rev_dwipreproc_dir}"/b0_rev_degibbs_MC.nii.gz mean \
+  "${rev_dwipreproc_dir}"/b0_rev_degibbs_MC_AVG.mif -axis 3 -info ${force_run}
+
+  # Concatenate primary and reverse PE b0 files
+  cmd_run "${rev_dwipreproc_dir}"/b0_rev_degibbs_MC_AVG.mif \
+  "${preproc_dir}"/dwi_denoised_degibbs_b0_MC_AVG_rev_b0_MC_AVE_pair.mif \
+  "join the two b0 files." \
+  mrcat "${preproc_dir}"/dwi_denoised_degibbs_b0_MC_AVG.mif \
+  "${rev_dwipreproc_dir}"/b0_rev_degibbs_MC_AVG.mif \
+  -axis 3 "${preproc_dir}"/dwi_denoised_degibbs_b0_MC_AVG_rev_b0_MC_AVE_pair.mif -info ${force_run}
+
+  # dwifslpreproc run
+  cmd_run "${preproc_dir}"/dwi_denoised_degibbs_b0_MC_AVG_rev_b0_MC_AVE_pair.mif \
+  "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+  "distortion, motion, and eddy corrections." \
+  dwifslpreproc "${preproc_dir}"/dwi_denoised_degibbs.mif "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+  -nocleanup -scratch "${preproc_scratch}"/ ${pe_dir_run} ${PE_dir^^} ${rpe} ${readout_time_run} ${readout_time} \
+  -se_epi "${preproc_dir}"/dwi_denoised_degibbs_b0_MC_AVG_rev_b0_MC_AVE_pair.mif -align_seepi \
+  -info ${force_run} \
+  -eddyqc_all "${preproc_eddyQC}"/ ${slspec_run} ${slspec} \
+  -eddy_options '"' $(echo ${fsl_eddy_options}) '"'
+
+#=========================================================================================================================
+#=========================================================================================================================
+elif [[ "${PE_des}" -eq "2" ]]; then
+    
+  ##     Not tested yet because there are no such data.     ###
+
+  # making preprocessing directory for the reverse PE data
+  mkdir -vp "${preproc_dir}"/rev_dwipreprocessed/
+  rev_dwipreproc_dir="${preproc_dir}"/rev_dwipreprocessed/
+
+  # Denoising
+  cmd_run "${input_dir}"/dwi_rev.mif \
+  "${rev_dwipreproc_dir}"/dwi_rev_denoised.mif \
+  "Denoising reverse data." \
+  dwidenoise "${input_dir}"/dwi_rev.mif "${rev_dwipreproc_dir}"/dwi_rev_denoised.mif \
+  -noise "${rev_dwipreproc_dir}"/dwi_rev_noised.mif \
+  -info ${force_run}
+
+  # Denoising Residuals
+  cmd_run "${rev_dwipreproc_dir}"/dwi_rev_denoised.mif \
+  "${rev_dwipreproc_dir}"/dwi_rev_denoising_residuals.mif \
+  "Denoising Residuals reverse data." \
+  mrcalc "${input_dir}"/dwi_rev.mif "${rev_dwipreproc_dir}"/dwi_rev_denoised.mif \
+  -subtract "${rev_dwipreproc_dir}"/dwi_rev_denoising_residuals.mif \
+  -info ${force_run}
+
+  # Unring gibbs
+  cmd_run "${rev_dwipreproc_dir}"/dwi_rev_denoised.mif \
+  "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs.mif \
+  "Unringing Gibbs artifacts reverse data." \
+  mrdegibbs -axes "${ax_dir}" \
+  -info ${force_run} \
+  "${rev_dwipreproc_dir}"/dwi_rev_denoised.mif \
+  "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs.mif
+
+  # Unringing Residuals
+  cmd_run "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs.mif \
+  "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs_residuals.mif \
+  "Unringing Residuals reverse data." \
+  mrcalc "${rev_dwipreproc_dir}"/dwi_rev_denoised.mif "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs.mif \
+  -subtract "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs_residuals.mif \
+  -info ${force_run}
+
+  # Concatenate primary and reverse PE b0 files
+  cmd_run "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs.mif \
+  "${preproc_dir}"/dwi_denoised_degibbs_rev_denoised_degibbs_pair.mif \
+  "join the two b0 files." \
+  mrcat "${preproc_dir}"/dwi_denoised_degibbs.mif \
+  "${rev_dwipreproc_dir}"/dwi_rev_denoised_degibbs.mif \
+  -axis 3 "${preproc_dir}"/dwi_denoised_degibbs_rev_denoised_degibbs_pair.mif -info ${force_run}
+
+  # dwifslpreproc run
+  cmd_run "${preproc_dir}"/dwi_denoised_degibbs_rev_denoised_degibbs_pair.mif \
+  "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+  "distortion, motion, and eddy corrections." \
+  dwifslpreproc "${preproc_dir}"/dwi_denoised_degibbs_rev_denoised_degibbs_pair.mif "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+  -nocleanup -scratch "${preproc_scratch}"/ ${pe_dir_run} ${PE_dir^^} ${rpe} ${readout_time_run} ${readout_time} \
+  #-se_epi ${preproc_dir}/dwi_denoised_degibbs_b0_MC_AVG_rev_b0_MC_AVE_pair.mif -align_seepi \
+  -info ${force_run} \
+  -eddyqc_all "${preproc_eddyQC}"/ ${slspec_run} ${slspec} \
+  -eddy_options '"' $(echo ${fsl_eddy_options}) '"'
+#=========================================================================================================================
+#=========================================================================================================================
+fi
+
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+
+###         Eddy Quad Workaround          ###
+# Due to changes in FSL and MRtrix3 versions, this is a workaround to get around the eddy_quad issues when running eddy_cuda.
+# This is mainly caused by having an odd number of dimension in at least in one dimension. 
+# FSL 6 has a solution but current MRtrix version cannot be adapted, hence, this workaround now. 
+# Future version of MRtrix (3.1.0) is supposed to have these implemented. Until then. 
+# With the future release, all of the workarounds related to the padding need to be removed!
+# Removing the padding for the eddy_quad input.
+if [[ ! $(( num_z_dim % 2)) -eq "0" ]]; then
+
+  # unpadding the nifti files first.
+  for eddy_quad_input_nii in $(ls "${preproc_scratch}"/*/{field_map,eddy_mask,dwi_post_eddy,dwi_post_eddy.eddy_mbs_first_order_fields,dwi_post_eddy.eddy_outlier_free_data}.nii); do
+  eddy_quad_input_nii_root=$(dirname ${eddy_quad_input_nii})
+  eddy_quad_input_nii_base=$(basename ${eddy_quad_input_nii})
+
+
+  cmd_run "${eddy_quad_input_nii}" \
+  "${eddy_quad_input_nii_root}"/${eddy_quad_input_nii_base%%.*}_unpadded.${eddy_quad_input_nii_base#*.} \
+  "unpadding for eddy_quad." \
+  mrconvert ${eddy_quad_input_nii} "${eddy_quad_input_nii_root}"/${eddy_quad_input_nii_base%%.*}_unpadded.${eddy_quad_input_nii_base#*.} \
+  -coord 2 0:$(( num_z_dim - 1 )) -info ${force_run}
+
+
+  done
+
+
+  # unpadding the text files.
+  for eddy_quad_input_ascii in $(ls "${preproc_scratch}"/*/dwi_post_eddy.{eddy_movement_rms,eddy_parameters,eddy_command_txt,eddy_values_of_all_input_parameters}); do
+  eddy_quad_input_ascii_root=$(dirname ${eddy_quad_input_ascii})
+  eddy_quad_input_ascii_base=$(basename ${eddy_quad_input_ascii})
+
+
+  cmd_run ${eddy_quad_input_ascii} \
+  "${eddy_quad_input_ascii_root}"/${eddy_quad_input_ascii_base%%.*}_unpadded.${eddy_quad_input_ascii_base#*.} \
+  "copying the ascii files for eddy_quad." \
+  cp -v ${eddy_quad_input_ascii} "${eddy_quad_input_ascii_root}"/${eddy_quad_input_ascii_base%%.*}_unpadded.${eddy_quad_input_ascii_base#*.} \
+
+
+  done
+fi
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+###         Eddy Quad & Outliers check point            ###
+
+# Percentage of outliers per frame
+if [[ $(( num_z_dim % 2)) -eq "0" ]]; then
+
+  cmd_run ${preproc_eddyQC}/eddy_outlier_map \
+  "${preproc_eddyQC}"/dwifslpreproc_Frame_outliers_perc.csv \
+  "calculating the ourlier percentage." \
+  "awk '{ for (i = 1; i<=NF; i++) sum += \$i; print NR-2, sum/NF*100; sum=0 }' \
+  OFS=',' ${preproc_eddyQC}/eddy_outlier_map | \
+  tail -n +2 > ${preproc_eddyQC}/dwifslpreproc_Frame_outliers_perc.csv"
+
+else
+
+
+  if [[ -n "${slice_MC}" ]]; then  
+    # unpad slspec.txt file
+    dwi_post_eddy_slspec=$(find "${preproc_scratch}"/ -mindepth 2 -maxdepth 2 -type f -name slspec.txt)
+    dwi_post_dir=$(dirname "${dwi_post_eddy_slspec}")
+
+
+    if [[ ! -f $(dirname "${dwi_post_eddy_slspec}")/slspec_unpadded.txt ]]; then
+      
+      echo "unpadding slspec.txt file." 
+      cat "${dwi_post_eddy_slspec}" | sed "s#${num_z_dim}##" > $(dirname "${dwi_post_eddy_slspec}")/slspec_unpadded.txt
+
+
+    elif [[ -f "${dwi_post_dir}"/slspec_unpadded.txt ]]; then
+
+      echo "The unpadded slspec file already exists!"
+
+
+    elif [[ -f $(dirname "${dwi_post_eddy_slspec}")/slspec_unpadded.txt && -n "${clobber}" ]]; then
+      
+      echo "The unpadded slspec file already exists but you want to overwrite."
+      echo "unpadding slspec.txt file." 
+      cat "${dwi_post_eddy_slspec}" | sed "s#${num_z_dim}##" > $(dirname "${dwi_post_eddy_slspec}")/slspec_unpadded.txt
+
+    fi
+
+
+    # eddy_quad
+    cmd_run "${dwi_post_dir}"/eddy_indices.txt \
+    "${dwi_post_dir}/dwi_post_eddy_unpadded.qc/qc.json" \
+    "running eddy_quad on unpadded data." \
+    eddy_quad "${dwi_post_dir}"/dwi_post_eddy_unpadded \
+    -idx "${dwi_post_dir}"/eddy_indices.txt \
+    -par "${dwi_post_dir}"/eddy_config.txt \
+    -m "${dwi_post_dir}"/eddy_mask_unpadded.nii \
+    -b "${dwi_post_dir}"/bvals \
+    -f "${dwi_post_dir}"/field_map_unpadded.nii \
+    -s "${dwi_post_dir}"/slspec_unpadded.txt -v 
+
+  else 
+    # eddy_quad
+    dwi_post_eddy_slspec=$(find "${preproc_scratch}"/ -mindepth 2 -maxdepth 2 -type f -name eddy_indices.txt)
+    dwi_post_dir=$(dirname "${dwi_post_eddy_slspec}")
+
+
+    cmd_run "${dwi_post_dir}"/eddy_indices.txt \
+    "${dwi_post_dir}/dwi_post_eddy_unpadded.qc/qc.json" \
+    "running eddy_quad on unpadded data." \
+    eddy_quad "${dwi_post_dir}"/dwi_post_eddy_unpadded \
+    -idx "${dwi_post_dir}"/eddy_indices.txt \
+    -par "${dwi_post_dir}"/eddy_config.txt \
+    -m "${dwi_post_dir}"/eddy_mask_unpadded.nii \
+    -b "${dwi_post_dir}"/bvals \
+    -f "${dwi_post_dir}"/field_map_unpadded.nii \
+    -v 
+  fi
+
+  # unpadding and calculating the outlier file
+  cmd_run ${preproc_eddyQC}/eddy_outlier_map \
+  "${preproc_eddyQC}"/dwifslpreproc_Frame_outliers_perc.csv \
+  "calculating the ourlier percentage." \
+  "awk '{ for (i = 1; i<=NF-1; i++) sum += \$i; print NR-2, sum/(NF-1)*100; sum=0 }' \
+  OFS=',' ${preproc_eddyQC}/eddy_outlier_map | \
+  tail -n +2 > ${preproc_eddyQC}/dwifslpreproc_Frame_outliers_perc.csv"
+
+fi
+
+
+if [[ ! -f "${preproc_eddyQC}"/dwifslpreproc_Frame_outliers_perc.csv ]]; then 
+  echo "Opps: outlier summary file is not generated! Excuse me..."
+  exit 5
+else
+  # Putting the headers
+  file_header=$(head -n 1 "${preproc_eddyQC}"/dwifslpreproc_Frame_outliers_perc.csv) 
+  header="Frame_index,outliers_perc"
+
+  if [[ "${header}" == "${file_header}" ]]; then
+    echo -e "\n The header is already present. \n"
+  else
+
+    sed -i "1s/^/${header}\n/" "${preproc_eddyQC}"/dwifslpreproc_Frame_outliers_perc.csv    
+
+    # Removing the outlier index
+    for i in $(tail -n +2 "${preproc_eddyQC}"/dwifslpreproc_Frame_outliers_perc.csv); do
+
+    frame=$(echo $i | cut -d"," -f1);
+    outlier=$(echo $i | cut -d"," -f2);
+
+      # Awk option if necessary
+      if awk -v out=${outlier} -v thres=${outlier_thres} 'BEGIN {( out <= thres)}'; then
+        new_frame_index+=$(echo -n ${frame},)      
+      fi
+    done
+  fi
+fi
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+# Removing the outlier frame from the dwi preprocessed file
+cmd_run "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+"${preproc_dir}"/dwi_denoised_degibbs_preproc_clean.mif \
+"clean up." \
+mrconvert "${preproc_dir}"/dwi_denoised_degibbs_preproc.mif \
+-coord 3 $(echo ${new_frame_index::-1}) \
+"${preproc_dir}"/dwi_denoised_degibbs_preproc_clean.mif -info ${force_run}
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+
+# QC the preprocessed image.
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+# N4 Bias field correction using ANTs
+cmd_run "${preproc_dir}"/dwi_denoised_degibbs_preproc_clean.mif \
+"${preproc_dir}"/dwi_denoised_degibbs_preproc_clean_N4.mif \
+"N4 Bias field correction." \
+dwibiascorrect ants "${preproc_dir}"/dwi_denoised_degibbs_preproc_clean.mif \
+"${preproc_dir}"/dwi_denoised_degibbs_preproc_clean_N4.mif \
+-bias "${preproc_dir}"/dwi_denoised_degibbs_preproc_clean_N4Bias.mif \
+-scratch "${preproc_dir}" -info ${force_run}
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+# Upsampling dwi
+cmd_run "${preproc_dir}"/dwi_denoised_degibbs_preproc_clean_N4.mif \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.mif \
+"Upsampling." \
+mrgrid -info ${force_run} "${preproc_dir}"/dwi_denoised_degibbs_preproc_clean_N4.mif \
+regrid -vox "${voxsize}" \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.mif
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+
+###     DWI <--> T1 processing      ###
+# T1 N4 Bias field correction
+cmd_run ${t1} \
+"${t1_proc_dir}"/t1_N4.nii.gz \
+"T1 N4 Bias field correction." \
+N4BiasFieldCorrection -d 3 -i ${t1} \
+-o "${t1_proc_dir}"/t1_N4.nii.gz --verbose
+
+
+# Brain masking
+cmd_run "${t1_proc_dir}"/t1_N4.nii.gz \
+"${t1_proc_dir}"/t1_N4_WB.nii.gz \
+"Skull stripping." \
+mrcalc -info ${force_run} "${t1_proc_dir}"/t1_N4.nii.gz \
+"${t1_mask}" -mult "${t1_proc_dir}"/t1_N4_WB.nii.gz
+
+
+# 5 Tissue Segmentation
+cmd_run "${t1_freesurfer}" \
+"${t1_proc_dir}"/t1_N4_5tt_clean.nii.gz \
+"5 tissue segmentation." \
+5ttgen -info \
+freesurfer "${t1_freesurfer}" \
+"${t1_proc_dir}"/t1_N4_5tt_clean.nii.gz \
+-nocrop ${force_run} -scratch "${t1_proc_dir}" 
+
+
+# Extracting b0 file from DWI preprocessed file
+cmd_run ${regrid_dir}/dwi_denoised_degibbs_preproc_clean_N4_${voxsize}regrid.mif \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_b0_AVG.nii.gz \
+"Extracting b0 file from DWI preprocessed file." \
+"dwiextract ${regrid_dir}/dwi_denoised_degibbs_preproc_clean_N4_${voxsize}regrid.mif - -bzero -info | \
+mrmath - mean - -axis 3 -info | \
+mrconvert - ${regrid_dir}/dwi_denoised_degibbs_preproc_clean_N4_${voxsize}regrid_b0_AVG.nii.gz -info ${force_run}"
+
+
+# Rigid body registration
+cmd_run "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_b0_AVG.nii.gz \
+"${dwi2t1_transforms_dir}/dwi2t10GenericAffine.mat" \
+"dwi and T1 Rigid body registration." \
+niiantsRigid.sh "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_b0_AVG.nii.gz \
+"${t1_proc_dir}"/t1_N4.nii.gz "${dwi2t1_transforms_dir}/" \
+"${dwi2t1_resampled_dir}/" dwi2t1
+
+
+# bring 5 tissue mask to dwi space
+cmd_run ${dwi2t1_transforms_dir}/dwi2t10GenericAffine.mat \
+"${dwispace_masks_dir}"/t1_N4_5tt_clean_dwispace.nii.gz \
+"5 tissue ACT mask to dwi space." \
+antsApplyTransforms -d 3 -e 3 -i "${t1_proc_dir}"/t1_N4_5tt_clean.nii.gz \
+-r "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_b0_AVG.nii.gz \
+-n NearestNeighbor \
+-t [ ${dwi2t1_transforms_dir}/dwi2t10GenericAffine.mat, 1 ] \
+-o "${dwispace_masks_dir}"/t1_N4_5tt_clean_dwispace.nii.gz -v
+
+
+# GMWM boundary If you want to use GMWM boundary seeding strategy
+cmd_run "${dwispace_masks_dir}"/t1_N4_5tt_clean_dwispace.nii.gz \
+"${dwispace_masks_dir}"/t1_N4_5tt_clean_dwispace_GMWMseed.mif \
+"GM-WM boundary for the seeding strategy." \
+5tt2gmwmi "${dwispace_masks_dir}"/t1_N4_5tt_clean_dwispace.nii.gz \
+"${dwispace_masks_dir}"/t1_N4_5tt_clean_dwispace_GMWMseed.mif -info ${force_run}
+
+# bring t1 mask to dwi space
+cmd_run "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_b0_AVG.nii.gz \
+"${dwispace_masks_dir}"/t1_mask_dwispace.nii.gz \
+"T1 mask to dwi space." \
+antsApplyTransforms -d 3 -i "${t1_mask}" \
+-r "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_b0_AVG.nii.gz \
+-n NearestNeighbor \
+-t [ ${dwi2t1_transforms_dir}/dwi2t10GenericAffine.mat, 1 ] \
+-o "${dwispace_masks_dir}"/t1_mask_dwispace.nii.gz -v
+
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+###     FA, MD, AD, and RD maps     ###
+# convert to nii
+cmd_run "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.mif \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.nii.gz \
+"Converting the preprocessed file into .nii.gz format." \
+mrconvert "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.mif \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.nii.gz \
+-export_grad_mrtrix "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_grad_table \
+-export_grad_fsl "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_bvecs \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_bvals \
+-info ${force_run}
+
+
+# skull strip using bets
+cmd_run "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.nii.gz \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_bet.nii \
+"Skull stripping using BETs as an input to FDT." \
+bet2 "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.nii.gz \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_bet.nii \
+-f 0.2 -v
+
+# DTIFIT
+cmd_run "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.nii.gz \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_FA.nii \
+"DTI FIT: Generating FA and MD maps." \
+dtifit --verbose --data="${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid.nii.gz \
+--mask="${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_bet.nii \
+--bvecs="${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_bvecs \
+--bvals="${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_bvals \
+--out="${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid
+
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+
+# AD 
+# AD is the first lambda/eigenvalue
+cmd_run "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_L1.nii \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_AD.nii \
+"AD map." \
+cp -v "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_L1.nii \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_AD.nii
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+
+# RD
+# RD is (lambda2 + lambda3)/2
+cmd_run "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_L2.nii \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_RD.nii \
+"RD map." \
+mrcalc "${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_L2.nii \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_L3.nii -add \
+2 -div \
+"${regrid_dir}"/dwi_denoised_degibbs_preproc_clean_N4_"${voxsize}"regrid_RD.nii
+
+
+#=========================================================================================================================
+#=========================================================================================================================
+
+
+
+###         FINISH          ###
+
+DWI_preproc_end_time=`date +%s`
+DWI_preproc_elapsed=$((DWI_preproc_end_time - DWI_preproc_start_time))
+
+
+echo
+echo
+echo "--------------------------------------------------------------------------------------"
+echo " CONGRATULATIONS! DWI Preprocessing step COMPLETED! "
+echo " DWI Preprocessing step executed in ${DWI_preproc_elapsed} seconds"
+echo " $(( DWI_preproc_elapsed / 3600 ))h $(( DWI_preproc_elapsed %3600 / 60 ))m $(( DWI_preproc_elapsed % 60 ))s"
+echo "--------------------------------------------------------------------------------------"
+echo
+echo
+
+exit 0

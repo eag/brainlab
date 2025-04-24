@@ -2,167 +2,323 @@
 set -euo pipefail
 
 #===============================================================================
-### REQUIREMENTS ###
+### CONFIGURATION
 #===============================================================================
-
-# MRTRIX
-
-
-#-------------------------------------------------------------------------------
-### USAGE ###
-#-------------------------------------------------------------------------------
-
-### ###
-
-#-------------------------------------------------------------------------------
-### VARIABLES ###
-#-------------------------------------------------------------------------------
 
 SUB_ID="BCSA1F001"
 IN_DIR="${HOME}/tmp/test_datasets/dti/leducq/organized"
 OUT_DIR="${HOME}/tmp/test_datasets/dti/leducq/derivatives/dti"
-LOG_FN="${OUT_DIR}/logs/preproc_${SUB_ID}.log"
-DWI_AP_PFX="DTI_AP"
-DWI_PA_PFX="DTI_PA"
-
-THREADS=6
+LOG_FN="${HOME}/tmp/junk.txt"
+DWI_PFX="DTI"
+THREADS=3
 
 #-------------------------------------------------------------------------------
-### CONFIG ###
+### VARIABLES 
 #-------------------------------------------------------------------------------
+
+### input variables, autofilled later ###
+PRIMARY_DTI_NII=""
+RPE_B0_NII=""
+RPE_DWI_NII=""
+RPE_BVEC=""
+RPE_BVAL=""
+PRIMARY_DTI_BVAL=""
+PRIMARY_DTI_BVEC=""
+PRIMARY_DTI_JSON=""
+RPE_JSON=""
+SLICE_OR=""
+
+### output variables ###
+OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
+
+#-------------------------------------------------------------------------------
+### SETUP FUNCTIONS
+#-------------------------------------------------------------------------------
+
+function log() 
+{ 
+  echo "[$(date '+%F %T')] $*" | tee -a "${LOG_FN}"; 
+}
 
 function setup_environment
-{}
-  ### standard variables ###
-  LIST_DIR=${OUT_DIR}/lists
-  LIST_FN=${LIST_DIR}/subject_list.txt
-
-  DWI_AP=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.nii.gz
-  BVAL=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bval
-  BVEC=${IN_DIR}/${SUB_ID}/${DWI_AP_PFX}.bvec
-  JSON_AP=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
-  DWI_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.nii.gz
-  JSON_PA=${IN_DIR}/${SUB_ID}/${DWI_PA_PFX}.json
-
-  ### checks and paths ###
-  if [[ $# -ne 1 ]]; then
-    echo "USAGE ERROR"
+{
+  if [[ ! -d "${IN_DIR}/${SUB_ID}" ]]; then
+    echo "ERROR: Input directory ${IN_DIR}/${SUB_ID} does not exist"
     exit 1
   fi
 }
 
-#-------------------------------------------------------------------------------
-### FUNCTIONS ###
-#-------------------------------------------------------------------------------
-
-function prep_dir
+run_if_missing() 
 {
-  echo "Preparing directories..."
+  local outfile="$1"
+  shift
+  if [[ ! -f "${outfile}" ]]; then
+    log "Running: $*"
+    "$@"
+  else
+    log "$(basename "${outfile}") already exists, skipping"
+  fi
+}
 
-  if [[ ! -d ${IN_DIR} ]]; then
-    echo "Input directory does not exist: ${IN_DIR}"
+#-------------------------------------------------------------------------------
+### PROCESSING FUNCTIONS
+#-------------------------------------------------------------------------------
+
+verify_minimum_required_inputs()
+{
+  log "PRIMARY_DTI_NII : $(basename "${PRIMARY_DTI_NII:-}")"
+  log "PRIMARY_DTI_BVAL: $(basename "${PRIMARY_DTI_BVAL:-}")"
+  log "PRIMARY_DTI_BVEC: $(basename "${PRIMARY_DTI_BVEC:-}")"
+  log "PRIMARY_DTI_JSON: $(basename "${PRIMARY_DTI_JSON:-}")"
+  log "RPE_B0_NII     : $(basename "${RPE_B0_NII:-}")"
+  log "RPE_DWI_NII    : $(basename "${RPE_DWI_NII:-}")"
+  log "RPE_JSON       : $(basename "${RPE_JSON:-}")"
+  log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
+  log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
+
+
+  if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
+        -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
+    log "ERROR: Missing primary DTI files"
+    exit 1
+  fi
+}
+
+detect_dti_files() 
+{
+  pushd "${IN_DIR}/${SUB_ID}" 
+
+  for nii in ${DWI_PFX}_*.nii.gz; do
+    base="${nii%.nii.gz}"
+    bval="${base}.bval"
+    bvec="${base}.bvec"
+    json="${base}.json"
+
+    if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
+      if [[ -z "${PRIMARY_DTI_NII}" ]]; then
+        PRIMARY_DTI_NII="${nii}"
+        PRIMARY_DTI_BVAL="${bval}"
+        PRIMARY_DTI_BVEC="${bvec}"
+        PRIMARY_DTI_JSON="${json}"
+      else
+        RPE_DWI_NII="${nii}"
+        RPE_JSON="${json}"
+        RPE_BVAL="${bval}"
+        RPE_BVEC="${bvec}"
+      fi
+    elif [[ -f "${nii}" && -f "${json}" && ! -f "${bval}" && ! -f "${bvec}" ]]; then
+      RPE_B0_NII="${nii}"
+      RPE_JSON="${json}"
+    fi
+  done
+
+  if [[ -n "${PRIMARY_DTI_JSON}" && -n "${RPE_JSON}" ]]; then
+    pe_primary=$(jq -r '.PhaseEncodingDirection' "${PRIMARY_DTI_JSON}")
+    pe_rpe=$(jq -r '.PhaseEncodingDirection' "${RPE_JSON}")
+
+    if [[ "${pe_primary}" == "j" && "${pe_rpe}" == "j-" ]]; then
+      tmp="${PRIMARY_DTI_NII}"
+      PRIMARY_DTI_NII="${RPE_DWI_NII}"
+      RPE_DWI_NII="${tmp}"
+
+      tmp="${PRIMARY_DTI_BVAL}"
+      PRIMARY_DTI_BVAL="${RPE_DWI_NII%.nii.gz}.bval"
+      tmp="${PRIMARY_DTI_BVEC}"
+      PRIMARY_DTI_BVEC="${RPE_DWI_NII%.nii.gz}.bvec"
+      tmp="${PRIMARY_DTI_JSON}"
+      PRIMARY_DTI_JSON="${RPE_JSON}"
+      RPE_JSON="${tmp}"
+    fi
+  fi
+
+  popd
+
+  if [[ -z "${PRIMARY_DTI_NII}" ]]; then
+    log "Primary DTI NII: $(basename "${PRIMARY_DTI_NII}") not found... stopping"
     exit 1
   fi
 
-  mkdir -p ${LIST_DIR}
-  mkdir -p ${OUT_DIR}
-
-  rm -f ${LIST_FN}
-  ls -d ${IN_DIR}/* | grep -Ev "lists|logs" > ${LIST_FN}
-  while read -r line; do
-    SUB_ID=$(echo ${line} | cut -d'/' -f1)
-    mkdir -p ${OUT_DIR}/${SUB_ID}
-  done < ${LIST_FN}
+  PRIMARY_DTI_NII="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_NII}"
+  PRIMARY_DTI_BVAL="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_BVAL}"
+  PRIMARY_DTI_BVEC="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_BVEC}"
+  PRIMARY_DTI_JSON="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_JSON}"
+  [[ -n "${RPE_B0_NII}" ]] && RPE_B0_NII="${IN_DIR}/${SUB_ID}/${RPE_B0_NII}"
+  [[ -n "${RPE_DWI_NII}" ]] && RPE_DWI_NII="${IN_DIR}/${SUB_ID}/${RPE_DWI_NII}"
+  [[ -n "${RPE_JSON}" ]] && RPE_JSON="${IN_DIR}/${SUB_ID}/${RPE_JSON}"
 }
 
-function run_dwi_preprocess()
+detect_slice_orientation_from_json() 
 {
-  mkdir -p ${OUT_DIR}/logs
-  rm -f ${LOG_FN}
+  local json_file="$1"
 
-  log() { echo "[$(date '+%F %T')] $*" | tee -a "${LOG_FN}"; }
+  if [[ ! -f "${json_file}" ]]; then
+    return
+  fi
+
+  local vals
+  vals=($(jq -r '.ImageOrientationPatientDICOM[]?' "${json_file}"))
+
+  if [[ "${#vals[@]}" -ne 6 ]]; then
+    return
+  fi
+
+  local Xx="${vals[0]}" Xy="${vals[1]}" Xz="${vals[2]}"
+  local Yx="${vals[3]}" Yy="${vals[4]}" Yz="${vals[5]}"
+
+  local Sx Sy Sz
+  Sx=$(echo "${Xy} * ${Yz} - ${Xz} * ${Yy}" | bc -l)
+  Sy=$(echo "${Xz} * ${Yx} - ${Xx} * ${Yz}" | bc -l)
+  Sz=$(echo "${Xx} * ${Yy} - ${Xy} * ${Yx}" | bc -l)
+
+  local abs_Sx abs_Sy abs_Sz
+  abs_Sx=$(echo "${Sx#-}" | bc -l)
+  abs_Sy=$(echo "${Sy#-}" | bc -l)
+  abs_Sz=$(echo "${Sz#-}" | bc -l)
+
+  if (( $(echo "${abs_Sz} >= ${abs_Sx} && ${abs_Sz} >= ${abs_Sy}" | bc -l) )); then
+    SLICE_OR="0,1"  # axial
+  elif (( $(echo "${abs_Sy} >= ${abs_Sx} && ${abs_Sy} >= ${abs_Sz}" | bc -l) )); then
+    SLICE_OR="0,2"  # coronal
+  else
+    SLICE_OR="1,2" # sagittal
+  fi
+  log "Slice orientation detected: ${SLICE_OR}"
+
+}
+
+#-------------------------------------------------------------------------------
+### PREPROCESSING FUNCTIONS
+#-------------------------------------------------------------------------------
+
+
+run_mrconvert()
+{
+  run_if_missing "${OUT_BASE_DIR}/dwi.mif" \
+    mrconvert ${PRIMARY_DTI_NII} "${OUT_BASE_DIR}/dwi.mif" \
+      -fslgrad ${PRIMARY_DTI_BVEC} ${PRIMARY_DTI_BVAL} \
+      -json_import ${PRIMARY_DTI_JSON} \
+      -nthreads "${THREADS}"
+
+  if [[ ! -z "${RPE_B0_NII}" ]]; then
+    run_if_missing "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
+      mrconvert "${RPE_B0_NII}" "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
+        -json_import "${RPE_JSON}" \
+        -nthreads "${THREADS}"
+  fi
+
+  if [[ ! -z "${RPE_DWI_NII}" ]]; then
+    run_if_missing "${OUT_BASE_DIR}/rpe_dwi.mif" \
+      mrconvert ${RPE_DTI_NII} "${OUT_BASE_DIR}/rpe_dwi.mif" \
+        -fslgrad ${RPE_BVEC} ${RPE_BVAL} \
+        -json_import ${RPE_JSON} \
+        -nthreads "${THREADS}"
+  fi
+}
+
+run_dwidenoise() 
+{
+  local input="$1"
+  local output="$2"
+  run_if_missing "${output}" \
+    dwidenoise "${input}" "${output}" -nthreads "${THREADS}"
+}
+
+run_degibbs() 
+{
+  local input="$1"
+  local output="$2"
+  detect_slice_orientation_from_json "${PRIMARY_DTI_JSON}"
+  
+  if [[ -z "${SLICE_OR}" ]]; then
+    log "Slice orientation not detected, using default (0,1)"
+    SLICE_OR="0,1"
+  fi
+  
+  run_if_missing "${output}" \
+    mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
+}
+
+run_dwi_preprocessing
+{
+  log "preprocessing DWI"
+
+  run_dwidenoise "${OUT_BASE_DIR}/dwi.mif" \
+    "${OUT_BASE_DIR}/dwi_denoised.mif"
+  
+  run_degibbs "${OUT_BASE_DIR}/dwi_denoised.mif" \
+    "${OUT_BASE_DIR}/dwi_denoised_degibbs.mif"
+}
+
+run_rpe_preprocessing
+{
+  ### preprocess rpe_b0, if available (scenario 2) ###
+  if [[ -n "${RPE_B0_NII}" ]]; then
+    log "preprocessing RPE B0"
+    run_degibbs "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
+      "${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif"
+  fi
+
+  ### preprocess rpe_dwi, if available (scenario 3) ###
+  if [[ -n "${RPE_DWI_NII}" ]]; then
+    log "preprocessing RPE DWI"
+
+    run_dwidenoise "${OUT_BASE_DIR}/rpe_dwi.mif" \
+      "${OUT_BASE_DIR}/rpe_dwi_denoised.mif"
+    
+    run_degibbs "${OUT_BASE_DIR}/rpe_dwi_denoised.mif" \
+      "${OUT_BASE_DIR}/rpe_dwi_denoised_degibbs.mif"
+  fi
+
+}
+
+run_dwipreproc_smart()
+{
+  local input="$1"
+  local output="$2"
+
+  if [[ -n "${RPE_DWI_NII}" ]]; then
+    # scenario 3
+    echo "TODO: implement scenario 3"
+  elif [[ -n "${RPE_B0_NII}" ]]; then
+    # scenario 2
+    echo "TODO: implement scenario 2"
+  else
+    # scenario 1
+    echo "TODO: implement"
+  fi
+}
+
+#-------------------------------------------------------------------------------
+### MAIN
+#-------------------------------------------------------------------------------
+
+main() 
+{
+  setup_environment
   log "Starting DTI pipeline for ${SUB_ID}"
 
-  
-  HAS_PA=false
-  [[ -f "$DWI_PA" && -s "$DWI_PA" ]] && HAS_PA=true
-
-  if [[ -f "$JSON_AP" ]]; then
-    PE_DIR=$(jq -r '.PhaseEncodingDirection // empty' "$JSON_AP")
-    READOUT=$(jq -r '.TotalReadoutTime // empty' "$JSON_AP")
-    [[ -z "$PE_DIR" ]] && PE_DIR=${DEFAULT_PE_DIR}
-    [[ -z "$READOUT" ]] && READOUT=${DEFAULT_READOUT}
-    log "Using PE direction: $PE_DIR"
-    log "Using Readout Time: $READOUT"
+  if [[ -z "${PRIMARY_DTI_NII}" ]]; then
+    log "Primary DTI not set: auto-detecting..."
+    detect_dti_files
   fi
 
+  ### prep ###
+  verify_minimum_required_inputs
+  run_mrconvert
 
-  log "Converting DWI to .mif with gradients"
-  mrconvert \
-    "$DWI_AP" "${OUT_DIR}/dwi.mif" -fslgrad "$BVEC" "$BVAL" -force
+  ### always run dwi preprocessing ###
+  run_dwi_preprocessing
 
-  log "Running dwidenoise"
-  dwidenoise \
-    "${OUT_DIR}/dwi.mif" "${OUT_DIR}/dwi_denoise.mif" \
-    -nthreads $THREADS -force
+  ##  run rpe preprocessing (when rpe data is detected) ###
+  run_rpe_preprocessing
+
+  ### run core dwi preprocessing ###
+  #run_dwipreproc_smart  
+
   
-  log "Running mrdegibbs"
-  mrdegibbs \
-    "${OUT_DIR}/dwi_denoise.mif" "${OUT_DIR}/dwi_degibbs.mif" \
-    -nthreads $THREADS -force
 
-  log "Exporting gradients and image for compatibility"
-  mrconvert \
-    "${OUT_DIR}/dwi_degibbs.mif" "${OUT_DIR}/dwi_degibbs.nii.gz" \
-    -export_grad_fsl "${OUT_DIR}/dwi_degibbs.bvec" "${OUT_DIR}/dwi_degibbs.bval" -force
-
-  if ${HAS_PA}; then
-    log "Extracting b0s for AP and PA"
-    dwidenoise "$DWI_PA" "${OUT_DIR}/dwi_pa_denoise.nii.gz" -force -nthreads $THREADS
-    mrdegibbs "${OUT_DIR}/dwi_pa_denoise.nii.gz" "${OUT_DIR}/dwi_pa_degibbs.nii.gz" -force -nthreads $THREADS
-
-    dwiextract "${OUT_DIR}/dwi_degibbs.mif" - -bzero | mrmath - mean "${OUT_DIR}/b0_ap.nii.gz" -axis 3 -force
-    dwiextract "${OUT_DIR}/dwi_pa_degibbs.nii.gz" - -bzero | mrmath - mean "${OUT_DIR}/b0_pa.nii.gz" -axis 3 -force
-
-    fslmerge -t "${OUT_DIR}/b0_pair.nii.gz" "${OUT_DIR}/b0_ap.nii.gz" "${OUT_DIR}/b0_pa.nii.gz"
-
-    log "Running dwifslpreproc with topup (b0_pair)"
-    dwifslpreproc \
-      "${OUT_DIR}/dwi_degibbs.mif" "${OUT_DIR}/dwi_preproc.mif" \
-      -pe_dir $PE_DIR \
-      -readout_time $READOUT \
-      -se_epi "${OUT_DIR}/b0_pair.nii.gz" \
-      -eddy_options " --repol" \
-      -nthreads $THREADS -force
-  else
-    log "No PA image: running dwifslpreproc without topup"
-    dwifslpreproc \
-      "${OUT_DIR}/dwi_degibbs.mif" "${OUT_DIR}/dwi_preproc.mif" \
-      -pe_dir $PE_DIR \
-      -readout_time $READOUT \
-      -eddy_options " --repol" \
-      -nthreads $THREADS -force
-  fi
-
-  log "Finished preprocessing"
 }
 
+main "$@"
 
 #-------------------------------------------------------------------------------
-### PROCESSING ###
-#-------------------------------------------------------------------------------
-
-setup_environment "$@"
-
-IDX=$1
-SUB_ID=$(cat ${LIST_FN} | head -n ${IDX} | tail -n 1)
-if ${IDX -eq 0}; then
-  prep_dir
-else
-  run_dwi_preprocess
-fi
-
-#-------------------------------------------------------------------------------
-
-
-
