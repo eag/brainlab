@@ -1,16 +1,20 @@
 #!/bin/bash
-set -euo pipefail
 
 #===============================================================================
 ### CONFIGURATION
 #===============================================================================
 
-SUB_ID="BCSA1F001"
-IN_DIR="${HOME}/tmp/test_datasets/dti/leducq/organized"
-OUT_DIR="${HOME}/tmp/test_datasets/dti/leducq/derivatives/dti"
+SUB_ID="sub-OND01BYC1006-sess-BL"
+IN_DIR="${HOME}/tmp/test_datasets/successes/organized"
+OUT_DIR="${HOME}/tmp/test_datasets/successes/derivatives/dti"
 LOG_FN="${HOME}/tmp/junk.txt"
 DWI_PFX="DTI"
 THREADS=3
+
+
+#TODO: remove
+export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
+export PATH=${PATH}:${ANTSPATH}
 
 #-------------------------------------------------------------------------------
 ### VARIABLES 
@@ -64,30 +68,10 @@ run_if_missing()
 ### PROCESSING FUNCTIONS
 #-------------------------------------------------------------------------------
 
-verify_minimum_required_inputs()
-{
-  log "PRIMARY_DTI_NII : $(basename "${PRIMARY_DTI_NII:-}")"
-  log "PRIMARY_DTI_BVAL: $(basename "${PRIMARY_DTI_BVAL:-}")"
-  log "PRIMARY_DTI_BVEC: $(basename "${PRIMARY_DTI_BVEC:-}")"
-  log "PRIMARY_DTI_JSON: $(basename "${PRIMARY_DTI_JSON:-}")"
-  log "RPE_B0_NII     : $(basename "${RPE_B0_NII:-}")"
-  log "RPE_DWI_NII    : $(basename "${RPE_DWI_NII:-}")"
-  log "RPE_JSON       : $(basename "${RPE_JSON:-}")"
-  log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
-  log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
-
-
-  if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
-        -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
-    log "ERROR: Missing primary DTI files"
-    exit 1
-  fi
-}
-
 detect_dti_files() 
 {
   pushd "${IN_DIR}/${SUB_ID}" 
-
+  
   for nii in ${DWI_PFX}_*.nii.gz; do
     base="${nii%.nii.gz}"
     bval="${base}.bval"
@@ -133,6 +117,7 @@ detect_dti_files()
 
   popd
 
+
   if [[ -z "${PRIMARY_DTI_NII}" ]]; then
     log "Primary DTI NII: $(basename "${PRIMARY_DTI_NII}") not found... stopping"
     exit 1
@@ -145,6 +130,28 @@ detect_dti_files()
   [[ -n "${RPE_B0_NII}" ]] && RPE_B0_NII="${IN_DIR}/${SUB_ID}/${RPE_B0_NII}"
   [[ -n "${RPE_DWI_NII}" ]] && RPE_DWI_NII="${IN_DIR}/${SUB_ID}/${RPE_DWI_NII}"
   [[ -n "${RPE_JSON}" ]] && RPE_JSON="${IN_DIR}/${SUB_ID}/${RPE_JSON}"
+
+}
+
+
+verify_minimum_required_inputs()
+{
+  log "PRIMARY_DTI_NII : $(basename "${PRIMARY_DTI_NII:-}")"
+  log "PRIMARY_DTI_BVAL: $(basename "${PRIMARY_DTI_BVAL:-}")"
+  log "PRIMARY_DTI_BVEC: $(basename "${PRIMARY_DTI_BVEC:-}")"
+  log "PRIMARY_DTI_JSON: $(basename "${PRIMARY_DTI_JSON:-}")"
+  log "RPE_B0_NII     : $(basename "${RPE_B0_NII:-}")"
+  log "RPE_DWI_NII    : $(basename "${RPE_DWI_NII:-}")"
+  log "RPE_JSON       : $(basename "${RPE_JSON:-}")"
+  log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
+  log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
+
+
+  if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
+        -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
+    log "ERROR: Missing primary DTI files"
+    exit 1
+  fi
 }
 
 detect_slice_orientation_from_json() 
@@ -184,14 +191,21 @@ detect_slice_orientation_from_json()
   fi
   log "Slice orientation detected: ${SLICE_OR}"
 
+  #log warning if not axial
+  if [[ "${SLICE_OR}" != "0,1" ]]; then
+    log "WARNING: Slice orientation is not axial (0,1). Detected: ${SLICE_OR}"
+  fi
+
 }
 
 #-------------------------------------------------------------------------------
 ### PREPROCESSING FUNCTIONS
+# - pipe functions work with pre-structured filenames
+# - run functions serve pipe functions with filenames as arguments
 #-------------------------------------------------------------------------------
 
 
-run_mrconvert()
+pipe_mrconvert()
 {
   run_if_missing "${OUT_BASE_DIR}/dwi.mif" \
     mrconvert ${PRIMARY_DTI_NII} "${OUT_BASE_DIR}/dwi.mif" \
@@ -238,7 +252,7 @@ run_degibbs()
     mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
 }
 
-run_dwi_preprocessing()
+pipe_dwi_preprocessing()
 {
   log "preprocessing DWI"
 
@@ -249,7 +263,7 @@ run_dwi_preprocessing()
     "${OUT_BASE_DIR}/dwi_denoised_degibbs.mif"
 }
 
-run_rpe_preprocessing()
+pipe_rpe_preprocessing()
 {
   ### preprocess rpe_b0, if available (scenario 2) ###
   if [[ -n "${RPE_B0_NII}" ]]; then
@@ -271,7 +285,7 @@ run_rpe_preprocessing()
 
 }
 
-run_dwipreproc_smart()
+pipe_dwipreproc_smart()
 {
   local input=${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
   local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
@@ -282,21 +296,88 @@ run_dwipreproc_smart()
   elif [[ -n "${RPE_B0_NII}" ]]; then
     # scenario 2
     log "Running dwifslpreproc for RPE B0 (scenario 2)"
-    dwifslpreproc ${input} ${output} \
-      -rpe_header \
-      -se_epi ${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif -align_seepi \
-      -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
-      -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
-      -info \
-      -scratch ${OUT_BASE_DIR}/scratch \
-      -nocleanup \
-      -nthreads "${THREADS}"
+    run_if_missing "${output}" \
+      dwifslpreproc ${input} ${output} \
+        -rpe_header \
+        -se_epi ${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif -align_seepi \
+        -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
+        -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
+        -info \
+        -scratch ${OUT_BASE_DIR}/scratch \
+        -nocleanup \
+        -nthreads "${THREADS}" \
+        -force
 
       #TODO FIX scratch dir 
   else
     # scenario 1
-    echo "TODO: implement"
+    log "Running dwifslpreproc for primary DWI (scenario 1)"
+    run_if_missing ${output} \
+      dwifslpreproc ${input} ${output} \
+        -rpe_header \
+        -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
+        -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
+        -info \
+        -scratch ${OUT_BASE_DIR}/scratch \
+        -nocleanup \
+        -nthreads "${THREADS}" \
+        -force
   fi
+}
+
+pipe_bias_correct()
+{
+  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
+  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias.mif
+
+  run_if_missing "${output}" \
+    dwibiascorrect ants "${input}" "${output}" \
+    -nthreads "${THREADS}"
+}
+
+pipe_upsample()
+{
+  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias.mif
+  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias_upsample.mif
+  
+  run_if_missing "${output}" \
+    mrgrid "${input}" \
+      regrid -voxel 1.25 "${output}"\
+      -interp sinc -force -nthreads "${THREADS}" 
+}
+
+pipe_tensor_fit()
+{
+  local input="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias_upsample.mif"
+  local output_dir="${OUT_BASE_DIR}/tensor_fit_upsample"
+
+  mkdir -p "${output_dir}"
+
+  local dwi_nii="${output_dir}/dwi_upsampled.nii.gz"
+  local bvec="${output_dir}/dwi_upsampled.bvecs"
+  local bval="${output_dir}/dwi_upsampled.bvals"
+  local mrtrix_grad="${output_dir}/dwi_upsampled_grad_table"
+
+  ### convert .mif to .nii.gz and export gradient files ###
+  run_if_missing "${dwi_nii}" \
+    mrconvert "${input}" "${dwi_nii}" \
+      -export_grad_fsl "${bvec}" "${bval}" \
+      -export_grad_mrtrix "${mrtrix_grad}" \
+      -nthreads "${THREADS}" -info
+
+
+  
+  bet "${dwi_nii}"  "${output_dir}"/dwi_upsampled_mask.nii.gz -f 0.3
+
+  ### run DTI fitting ###
+  run_if_missing "${output_dir}/dti_FA.nii.gz" \
+    dtifit \
+      --data="${dwi_nii}" \
+      --out="${output_dir}/dti" \
+      --mask="${output_dir}"/dwi_upsampled_mask.nii.gz \
+      --bvecs="${bvec}" \
+      --bvals="${bval}" \
+      --save_tensor
 }
 
 #-------------------------------------------------------------------------------
@@ -308,24 +389,35 @@ main()
   setup_environment
   log "Starting DTI pipeline for ${SUB_ID}"
 
+  ### if no primary DTI is set, try to detect it ###
   if [[ -z "${PRIMARY_DTI_NII}" ]]; then
     log "Primary DTI not set: auto-detecting..."
     detect_dti_files
   fi
 
-  ### prep ###
+  ### prep for preprocessing ###
   verify_minimum_required_inputs
-  run_mrconvert
 
-  ### always run dwi preprocessing ###
-  run_dwi_preprocessing
+  ### start pipeline steps ###
+  pipe_mrconvert
 
-  ##  run rpe preprocessing (when rpe data is detected) ###
-  run_rpe_preprocessing
+  ### run dwi preprocessing ###
+  pipe_dwi_preprocessing
+
+  ## run rpe preprocessing (runs only when rpe data is detected) ###
+  pipe_rpe_preprocessing
 
   ### run core dwi preprocessing ###
-  run_dwipreproc_smart  
+  pipe_dwipreproc_smart  
 
+  ### run bias correction ###
+  pipe_bias_correct 
+
+  ### run upsampling ###
+  pipe_upsample
+
+  ### run tensor fitting ###
+  pipe_tensor_fit
   
 
 }

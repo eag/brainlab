@@ -1,0 +1,6 @@
+mrconvert /home/egibson/work/code/brainlab/wrapper-scripts/bash/dti /home/egibson/work/code/brainlab/wrapper-scripts/bash/dti/dwibiascorrect-tmp-XIQ5XJ/in.mif
+
+mrconvert: scanning folder "/home/egib...ab/wrapper-scripts/bash/dti" for DICOM data... done
+mrconvert: [ERROR] no DICOM images found in "/home/egibson/work/code/brainlab/wrapper-scripts/bash/dti"
+mrconvert: [ERROR] error opening image "/home/egibson/work/code/brainlab/wrapper-scripts/bash/dti"
+
