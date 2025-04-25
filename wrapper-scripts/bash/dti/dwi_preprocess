@@ -286,9 +286,9 @@ run_dwipreproc_smart()
       -rpe_header \
       -se_epi ${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif -align_seepi \
       -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
-      -eddyqc_all eddyqc_dir \
+      -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
       -info \
-      -scratch ${HOME}/tmp/junk \
+      -scratch ${OUT_BASE_DIR}/scratch \
       -nocleanup \
       -nthreads "${THREADS}"
 
