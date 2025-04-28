@@ -78,7 +78,7 @@ run_if_exists()
 }
 
 #-------------------------------------------------------------------------------
-### PROCESSING FUNCTIONS
+### CONFIG FUNCTIONS
 #-------------------------------------------------------------------------------
 
 detect_dti_files() 
@@ -130,7 +130,6 @@ detect_dti_files()
 
   popd
 
-
   if [[ -z "${PRIMARY_DTI_NII}" ]]; then
     log "Primary DTI NII: $(basename "${PRIMARY_DTI_NII}") not found... stopping"
     exit 1
@@ -143,9 +142,7 @@ detect_dti_files()
   [[ -n "${RPE_B0_NII}" ]] && RPE_B0_NII="${IN_DIR}/${SUB_ID}/${RPE_B0_NII}"
   [[ -n "${RPE_DWI_NII}" ]] && RPE_DWI_NII="${IN_DIR}/${SUB_ID}/${RPE_DWI_NII}"
   [[ -n "${RPE_JSON}" ]] && RPE_JSON="${IN_DIR}/${SUB_ID}/${RPE_JSON}"
-
 }
-
 
 verify_minimum_required_inputs()
 {
@@ -208,15 +205,13 @@ detect_slice_orientation_from_json()
   if [[ "${SLICE_OR}" != "0,1" ]]; then
     log "WARNING: Slice orientation is not axial (0,1). Detected: ${SLICE_OR}"
   fi
-
 }
 
 #-------------------------------------------------------------------------------
-### PREPROCESSING FUNCTIONS
+### PREPROCESSING FUNCTIONS ###
 # - pipe functions work with pre-structured filenames
 # - run functions serve pipe functions with filenames as arguments
 #-------------------------------------------------------------------------------
-
 
 pipe_mrconvert()
 {
@@ -265,9 +260,6 @@ run_degibbs()
     mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
 }
 
-
-
-
 run_qc_residual() 
 {
   local original=$1
@@ -285,21 +277,17 @@ run_qc_residual()
     gui_runner="run-xvfb"
   fi
 
-  ### make certain output file exists otherwise mrview command will hang ###
-  if [[ ! -f "${output}" ]]; then
-    echo "Error: File ${output} not found. Skipping mrview."
-    exit 1
-  fi
-
   ### mrview must be run within the output directory to capture images ###
   pushd "${output_dir}" > /dev/null
 
-  ${gui_runner} mrview ${output} \
-    -mode 2 \
-    -capture.prefix ${png_pfx}_ \
-    -capture.folder ${QC_DIR} \
-    -capture.grab \
-    -exit
+  ### make certain output file exists otherwise mrview command will hang ###
+  run_if_exists ${output} \
+    ${gui_runner} mrview ${output} \
+      -mode 2 \
+      -capture.prefix ${png_pfx}_ \
+      -capture.folder ${QC_DIR} \
+      -capture.grab \
+      -exit
 
   popd > /dev/null
 }
@@ -314,14 +302,12 @@ pipe_dwi_preprocessing()
   run_degibbs ${OUT_BASE_DIR}/dwi_denoised.mif \
     ${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
 
-  ### QC check ###
   run_qc_residual ${OUT_BASE_DIR}/dwi.mif \
     ${OUT_BASE_DIR}/dwi_denoised.mif \
     ${OUT_BASE_DIR}/dwi_denoised_residuals.mif \
     ${SUB_ID}_dwi_denoised_residuals
     
-
-  run_qc_residual {OUT_BASE_DIR}/dwi_denoised.mif \
+  run_qc_residual ${OUT_BASE_DIR}/dwi_denoised.mif \
     ${OUT_BASE_DIR}/dwi_denoised_degibbs.mif \
     ${OUT_BASE_DIR}/dwi_denoised_degibbs_residuals.mif \
     ${SUB_ID}_dwi_denoised_degibbs_residuals
@@ -332,8 +318,14 @@ pipe_rpe_preprocessing()
   ### preprocess rpe_b0, if available (scenario 2) ###
   if [[ -n "${RPE_B0_NII}" ]]; then
     log "preprocessing RPE B0"
+    log "denoising set to null operation"
     run_degibbs "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
-      "${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif"
+      "${OUT_BASE_DIR}/rpe_dwi_denoised_degibbs.mif"
+
+    run_qc_residual {OUT_BASE_DIR}/rpe_b0_dwi.mif \
+      ${OUT_BASE_DIR}/rpe_denoised_degibbs.mif \
+      ${OUT_BASE_DIR}/rpe_denoised_degibbs_residuals.mif \
+      ${SUB_ID}_rpe_denoised_degibbs_residuals
   fi
 
   ### preprocess rpe_dwi, if available (scenario 3) ###
@@ -359,11 +351,12 @@ pipe_dwipreproc_smart()
     echo "TODO: implement scenario 3"
   elif [[ -n "${RPE_B0_NII}" ]]; then
     # scenario 2
+    local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
     log "Running dwifslpreproc for DWI RPE B0 acquistion (scenario 2)"
     run_if_missing "${output}" \
       dwifslpreproc ${input} ${output} \
         -rpe_header \
-        -se_epi ${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif -align_seepi \
+        -se_epi ${rpe} -align_seepi \
         -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility" \
         -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
         -info \
@@ -429,8 +422,6 @@ pipe_tensor_fit()
       -export_grad_mrtrix "${mrtrix_grad}" \
       -nthreads "${THREADS}" -info
 
-
-  
   bet "${dwi_nii}"  "${output_dir}"/dwi_upsampled_mask.nii.gz -f 0.3
 
   ### run DTI fitting ###
@@ -460,19 +451,19 @@ main()
   fi
 
   ### prep for preprocessing ###
-  #verify_minimum_required_inputs
+  verify_minimum_required_inputs
 
   ### start pipeline steps ###
-  #pipe_mrconvert
+  pipe_mrconvert
 
   ### run dwi preprocessing ###
-  #pipe_dwi_preprocessing
+  pipe_dwi_preprocessing
 
   ## run rpe preprocessing (runs only when rpe data is detected) ###
-  #pipe_rpe_preprocessing
+  pipe_rpe_preprocessing
 
   ### run core dwi preprocessing ###
-  #pipe_dwipreproc_smart  
+  pipe_dwipreproc_smart  
 
   ### run bias correction ###
   #pipe_bias_correct 
