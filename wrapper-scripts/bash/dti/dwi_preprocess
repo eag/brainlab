@@ -295,12 +295,12 @@ pipe_dwipreproc_smart()
     echo "TODO: implement scenario 3"
   elif [[ -n "${RPE_B0_NII}" ]]; then
     # scenario 2
-    log "Running dwifslpreproc for RPE B0 (scenario 2)"
+    log "Running dwifslpreproc for DWI RPE B0 acquistion (scenario 2)"
     run_if_missing "${output}" \
       dwifslpreproc ${input} ${output} \
         -rpe_header \
         -se_epi ${OUT_BASE_DIR}/rpe_b0_dwi_degibbs.mif -align_seepi \
-        -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
+        -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility" \
         -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
         -info \
         -scratch ${OUT_BASE_DIR}/scratch \
@@ -311,7 +311,7 @@ pipe_dwipreproc_smart()
       #TODO FIX scratch dir 
   else
     # scenario 1
-    log "Running dwifslpreproc for primary DWI (scenario 1)"
+    log "Running dwifslpreproc for DWI no RPI acquisition (scenario 1)"
     run_if_missing ${output} \
       dwifslpreproc ${input} ${output} \
         -rpe_header \
