@@ -5,16 +5,19 @@
 #===============================================================================
 
 SUB_ID="sub-OND01BYC1006-sess-BL"
-IN_DIR="${HOME}/tmp/test_datasets/successes/organized"
-OUT_DIR="${HOME}/tmp/test_datasets/successes/derivatives/dti"
-LOG_FN="${HOME}/tmp/junk.txt"
+IN_DIR="${HOME}/tmp/test_datasets_dti/organized"
+OUT_DIR="${HOME}/tmp/test_datasets_dti/derivatives/dti"
 DWI_PFX="DTI"
 THREADS=3
 
+QC_DIR="${OUT_DIR}/qc"
+LOG_DIR="${OUT_DIR}/logs"
+LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
+
 
 #TODO: remove
-export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
-export PATH=${PATH}:${ANTSPATH}
+#export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
+#export PATH=${PATH}:${ANTSPATH}
 
 #-------------------------------------------------------------------------------
 ### VARIABLES 
@@ -36,7 +39,7 @@ SLICE_OR=""
 OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
 
 #-------------------------------------------------------------------------------
-### SETUP FUNCTIONS
+### HELPER FUNCTIONS
 #-------------------------------------------------------------------------------
 
 function log() 
@@ -61,6 +64,16 @@ run_if_missing()
     "$@"
   else
     log "$(basename "${outfile}") already exists, skipping"
+  fi
+}
+
+run_if_exists() 
+{
+  local outfile="$1"
+  shift
+  if [[ -f "${outfile}" ]]; then
+    log "Running: $*"
+    "$@"
   fi
 }
 
@@ -252,15 +265,66 @@ run_degibbs()
     mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
 }
 
+
+
+
+run_qc_residual() 
+{
+  local original=$1
+  local processed=$2
+  local output=$3
+  local png_pfx=$4
+
+  ### generate residual image ###
+  run_if_missing ${output} \
+    mrcalc "${original}" "${processed}" -subtract ${output} -force -nthreads "${THREADS}"
+
+  ### need xvfb for mrview screenshot if on CC cluster ###
+  local gui_runner=""
+  if [[ -n "${CC_CLUSTER}" ]]; then
+    gui_runner="run-xvfb"
+  fi
+
+  ### make certain output file exists otherwise mrview command will hang ###
+  if [[ ! -f "${output}" ]]; then
+    echo "Error: File ${output} not found. Skipping mrview."
+    exit 1
+  fi
+
+  ### mrview must be run within the output directory to capture images ###
+  pushd "${output_dir}" > /dev/null
+
+  ${gui_runner} mrview ${output} \
+    -mode 2 \
+    -capture.prefix ${png_pfx}_ \
+    -capture.folder ${QC_DIR} \
+    -capture.grab \
+    -exit
+
+  popd > /dev/null
+}
+
 pipe_dwi_preprocessing()
 {
   log "preprocessing DWI"
 
-  run_dwidenoise "${OUT_BASE_DIR}/dwi.mif" \
-    "${OUT_BASE_DIR}/dwi_denoised.mif"
+  run_dwidenoise ${OUT_BASE_DIR}/dwi.mif \
+    ${OUT_BASE_DIR}/dwi_denoised.mif
   
-  run_degibbs "${OUT_BASE_DIR}/dwi_denoised.mif" \
-    "${OUT_BASE_DIR}/dwi_denoised_degibbs.mif"
+  run_degibbs ${OUT_BASE_DIR}/dwi_denoised.mif \
+    ${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
+
+  ### QC check ###
+  run_qc_residual ${OUT_BASE_DIR}/dwi.mif \
+    ${OUT_BASE_DIR}/dwi_denoised.mif \
+    ${OUT_BASE_DIR}/dwi_denoised_residuals.mif \
+    ${SUB_ID}_dwi_denoised_residuals
+    
+
+  run_qc_residual {OUT_BASE_DIR}/dwi_denoised.mif \
+    ${OUT_BASE_DIR}/dwi_denoised_degibbs.mif \
+    ${OUT_BASE_DIR}/dwi_denoised_degibbs_residuals.mif \
+    ${SUB_ID}_dwi_denoised_degibbs_residuals
 }
 
 pipe_rpe_preprocessing()
@@ -396,28 +460,28 @@ main()
   fi
 
   ### prep for preprocessing ###
-  verify_minimum_required_inputs
+  #verify_minimum_required_inputs
 
   ### start pipeline steps ###
-  pipe_mrconvert
+  #pipe_mrconvert
 
   ### run dwi preprocessing ###
-  pipe_dwi_preprocessing
+  #pipe_dwi_preprocessing
 
   ## run rpe preprocessing (runs only when rpe data is detected) ###
-  pipe_rpe_preprocessing
+  #pipe_rpe_preprocessing
 
   ### run core dwi preprocessing ###
-  pipe_dwipreproc_smart  
+  #pipe_dwipreproc_smart  
 
   ### run bias correction ###
-  pipe_bias_correct 
+  #pipe_bias_correct 
 
   ### run upsampling ###
-  pipe_upsample
+  #pipe_upsample
 
   ### run tensor fitting ###
-  pipe_tensor_fit
+  #pipe_tensor_fit
   
 
 }
