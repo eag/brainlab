@@ -12,10 +12,16 @@
 ### DATASET-SPECIFIC CONFIGURATION ###
 #===============================================================================
 
-#SUB_ID="sub-OND01BYC1006-sess-BL"
-SUB_ID="BCSA1F001"
 IN_DIR="${HOME}/tmp/test_datasets_dti/organized"
 OUT_DIR="${HOME}/tmp/test_datasets_dti/derivatives/dti"
+
+IN_DIR="${SCRATCH}/tmp/organized"
+OUT_DIR="${SCRATCH}/derivatives/dti"
+
+#SUB_ID="sub-OND01BYC1006-sess-BL"
+#SUB_ID="BCSA1F001"
+SUB_ID="BEM01_CAM_5035_01_SE01_MR"
+
 SCRATCH_DIR=${HOME}/tmp/
 DWI_PFX="DTI"
 THREADS=3
@@ -100,7 +106,7 @@ run_if_exists()
 detect_dti_files() 
 {
   pushd "${IN_DIR}/${SUB_ID}" > /dev/null
-  for nii in ${DWI_PFX}_*.nii.gz; do
+  for nii in ${DWI_PFX}*.nii.gz; do
     base="${nii%.nii.gz}"
     bval="${base}.bval"
     bvec="${base}.bvec"
@@ -516,7 +522,7 @@ pipe_tensor_fit()
 
   ### generate png of FA image and save to QC_DIR ###
   run_screen_grab_image ${output_dir}/dwi_FA.nii.gz \
-    ${SUB_ID}_dwi_FA \
+    ${SUB_ID}_dwi_FA 
 }
 
 #-------------------------------------------------------------------------------
