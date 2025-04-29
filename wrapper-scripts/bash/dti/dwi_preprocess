@@ -431,7 +431,7 @@ pipe_dwipreproc()
       dwifslpreproc ${input} ${output} \
         -rpe_header \
         -se_epi ${rpe} -align_seepi \
-        -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility" \
+        -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility --nthr ${THREADS}" \
         -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
         -info \
         -scratch ${scratch_dir} \
@@ -443,7 +443,7 @@ pipe_dwipreproc()
     run_if_missing ${output} \
       dwifslpreproc ${input} ${output} \
         -rpe_header \
-        -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
+        -eddy_options "--slm=linear --repol --data_is_shelled --verbose --nthr ${THREADS}" \
         -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
         -info \
         -scratch ${scratch_dir} \
@@ -564,7 +564,7 @@ main()
   ### run bias correction ###
   pipe_bias_correct 
 
-  ### run upsampling ###
+  ### run upsampling ###--nthr
   pipe_upsample
 
   ### run tensor fitting ###
