@@ -33,7 +33,7 @@ LOG_DIR="${OUT_DIR}/logs"
 LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
 
 #-------------------------------------------------------------------------------
-### STANDARD VARIABLES ###
+### GLOBAL VARIABLES ###
 #-------------------------------------------------------------------------------
 
 ### input variables, autofilled later ###
