@@ -1,12 +1,22 @@
 #!/bin/bash
 
+### NOTES ###
+# - this script performs minimal standard DTI preprocessing steps for clinical data
+# - aimed at generating highest quaility tensor fits possible, harmonized across studies
+# - accepts limitations of older datasets (e.g. EPI distortions if no RPE data)
+# - expects input as the subject folder containing DTI data from DICOM conversion
+#   - output from dcm2nii or equivalent (i.e. .nii.gz, .bval, .bvec, and .json files)
+# - processing steps determined by the image and json sidecar data in the input folder
+
 #===============================================================================
-### CONFIGURATION
+### DATASET-SPECIFIC CONFIGURATION ###
 #===============================================================================
 
-SUB_ID="sub-OND01BYC1006-sess-BL"
+#SUB_ID="sub-OND01BYC1006-sess-BL"
+SUB_ID="BCSA1F001"
 IN_DIR="${HOME}/tmp/test_datasets_dti/organized"
 OUT_DIR="${HOME}/tmp/test_datasets_dti/derivatives/dti"
+SCRATCH_DIR=${HOME}/tmp/
 DWI_PFX="DTI"
 THREADS=3
 
@@ -14,13 +24,8 @@ QC_DIR="${OUT_DIR}/qc"
 LOG_DIR="${OUT_DIR}/logs"
 LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
 
-
-#TODO: remove
-#export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
-#export PATH=${PATH}:${ANTSPATH}
-
 #-------------------------------------------------------------------------------
-### VARIABLES 
+### STANDARD VARIABLES ###
 #-------------------------------------------------------------------------------
 
 ### input variables, autofilled later ###
@@ -38,8 +43,11 @@ SLICE_OR=""
 ### output variables ###
 OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
 
+### pipeline defaults selected for harmonization across different studies ###
+REGRID_SIZE="1,1,1" 
+
 #-------------------------------------------------------------------------------
-### HELPER FUNCTIONS
+### HELPER FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
 function log() 
@@ -53,13 +61,21 @@ function setup_environment
     echo "ERROR: Input directory ${IN_DIR}/${SUB_ID} does not exist"
     exit 1
   fi
+
+  if [[ -n ${CC_CLUSTER} ]]; then
+    log "Running on CC cluster"
+    module load ants/2.5.0
+  else
+    export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
+    export PATH=${PATH}:${ANTSPATH}
+  fi
 }
 
 run_if_missing() 
 {
   local outfile="$1"
   shift
-  if [[ ! -f "${outfile}" ]]; then
+  if [[ ! -e "${outfile}" ]]; then
     log "Running: $*"
     "$@"
   else
@@ -71,20 +87,19 @@ run_if_exists()
 {
   local outfile="$1"
   shift
-  if [[ -f "${outfile}" ]]; then
+  if [[ -e "${outfile}" ]]; then
     log "Running: $*"
     "$@"
   fi
 }
 
 #-------------------------------------------------------------------------------
-### CONFIG FUNCTIONS
+### CONFIG FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
 detect_dti_files() 
 {
-  pushd "${IN_DIR}/${SUB_ID}" 
-  
+  pushd "${IN_DIR}/${SUB_ID}" > /dev/null
   for nii in ${DWI_PFX}_*.nii.gz; do
     base="${nii%.nii.gz}"
     bval="${base}.bval"
@@ -127,11 +142,12 @@ detect_dti_files()
       RPE_JSON="${tmp}"
     fi
   fi
+  popd > /dev/null
 
-  popd
-
-  if [[ -z "${PRIMARY_DTI_NII}" ]]; then
-    log "Primary DTI NII: $(basename "${PRIMARY_DTI_NII}") not found... stopping"
+  if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
+        -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
+    log "ERROR: Required primary DTI files not found in ${IN_DIR}/${SUB_ID}"
+    log $(ls -1 "${IN_DIR}/${SUB_ID}")
     exit 1
   fi
 
@@ -155,7 +171,6 @@ verify_minimum_required_inputs()
   log "RPE_JSON       : $(basename "${RPE_JSON:-}")"
   log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
   log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
-
 
   if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
         -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
@@ -201,7 +216,6 @@ detect_slice_orientation_from_json()
   fi
   log "Slice orientation detected: ${SLICE_OR}"
 
-  #log warning if not axial
   if [[ "${SLICE_OR}" != "0,1" ]]; then
     log "WARNING: Slice orientation is not axial (0,1). Detected: ${SLICE_OR}"
   fi
@@ -209,9 +223,75 @@ detect_slice_orientation_from_json()
 
 #-------------------------------------------------------------------------------
 ### PREPROCESSING FUNCTIONS ###
-# - pipe functions work with pre-structured filenames
-# - run functions serve pipe functions with filenames as arguments
 #-------------------------------------------------------------------------------
+# - "pipe_" functions operate on pipeline-specific filenames
+# - "run_" functions are utility functions used by pipe functions with filenames as arguments
+
+run_dwidenoise() 
+{
+  local input="$1"
+  local output="$2"
+  run_if_missing "${output}" \
+    dwidenoise "${input}" "${output}" -nthreads "${THREADS}"
+}
+
+run_degibbs() 
+{
+  local input="$1"
+  local output="$2"
+  detect_slice_orientation_from_json "${PRIMARY_DTI_JSON}"
+  
+  if [[ -z "${SLICE_OR}" ]]; then
+    log "Slice orientation not detected, using default (0,1)"
+    SLICE_OR="0,1"
+  fi
+  
+  run_if_missing "${output}" \
+    mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
+}
+
+run_screen_grab_image()
+{
+  local input="$1"
+  local output_png_pfx="$2"
+  local output_dir=$(dirname "${input}")
+  
+  ### need xvfb for mrview screenshot if on CC cluster ###
+  local gui_runner=""
+  if [[ -n "${CC_CLUSTER}" ]]; then
+    gui_runner="run-xvfb"
+  fi
+
+  ### mrview must be run within the output directory to capture images ###
+  pushd "${output_dir}" > /dev/null
+
+  ### make certain output file exists otherwise mrview command will hang ###
+  run_if_missing ${QC_DIR}/${output_png_pfx}_0000.png \
+    run_if_exists ${input} \
+      ${gui_runner} mrview ${input} \
+        -mode 2 \
+        -capture.prefix ${output_png_pfx}_ \
+        -capture.folder ${QC_DIR} \
+        -capture.grab \
+        -exit
+
+  popd > /dev/null
+}
+
+run_qc_residual() 
+{
+  local original=$1
+  local processed=$2
+  local output=$3
+  local png_pfx=$4
+
+  ### generate residual image ###
+  run_if_missing ${output} \
+    mrcalc "${original}" "${processed}" -subtract ${output} -force -nthreads "${THREADS}"
+
+  ### generate png of residual image ###
+  run_screen_grab_image "${output}" "${png_pfx}"
+}
 
 pipe_mrconvert()
 {
@@ -237,59 +317,40 @@ pipe_mrconvert()
   fi
 }
 
-run_dwidenoise() 
+run_quantatitive_eddy_qc()
 {
-  local input="$1"
-  local output="$2"
-  run_if_missing "${output}" \
-    dwidenoise "${input}" "${output}" -nthreads "${THREADS}"
-}
+  local eddy_dir="${OUT_BASE_DIR}/eddyqc_dir"
+  local input_dwi="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif"
+  local output_csv="${QC_DIR}/${SUB_ID}_eddy_qc_quantitative.csv"
 
-run_degibbs() 
-{
-  local input="$1"
-  local output="$2"
-  detect_slice_orientation_from_json "${PRIMARY_DTI_JSON}"
-  
-  if [[ -z "${SLICE_OR}" ]]; then
-    log "Slice orientation not detected, using default (0,1)"
-    SLICE_OR="0,1"
-  fi
-  
-  run_if_missing "${output}" \
-    mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
-}
+  local file_movement_rms="${eddy_dir}/eddy_movement_rms"
+  local file_restricted_movement_rms="${eddy_dir}/eddy_restricted_movement_rms"
+  local file_outlier_map="${eddy_dir}/eddy_outlier_map"
 
-run_qc_residual() 
-{
-  local original=$1
-  local processed=$2
-  local output=$3
-  local png_pfx=$4
+  ### extract mean absolute motion (second column) ###
+  mean_abs_motion=$(awk '{sum+=$2} END {if (NR>0) print sum/NR; else print "NA"}' "$file_movement_rms")
 
-  ### generate residual image ###
-  run_if_missing ${output} \
-    mrcalc "${original}" "${processed}" -subtract ${output} -force -nthreads "${THREADS}"
+  ### extract mean relative motion (second column) ###
+  mean_rel_motion=$(awk '{sum+=$2} END {if (NR>0) print sum/NR; else print "NA"}' "$file_restricted_movement_rms")
 
-  ### need xvfb for mrview screenshot if on CC cluster ###
-  local gui_runner=""
-  if [[ -n "${CC_CLUSTER}" ]]; then
-    gui_runner="run-xvfb"
+  ### calculate percent outlier slices ###
+  n_outlier_slices=$(wc -l < "$file_outlier_map")
+
+  n_volumes=$(mrinfo "$input_dwi" -size | awk '{print $4}')
+  n_slices=$(mrinfo "$input_dwi" -size | awk '{print $3}')
+  total_slices=$(( n_volumes * n_slices ))
+
+  if [[ $total_slices -gt 0 ]]; then
+    percent_outliers=$(awk -v outliers="$n_outlier_slices" -v total="$total_slices" 'BEGIN {print 100*outliers/total}')
+  else
+    percent_outliers="NA"
   fi
 
-  ### mrview must be run within the output directory to capture images ###
-  pushd "${output_dir}" > /dev/null
-
-  ### make certain output file exists otherwise mrview command will hang ###
-  run_if_exists ${output} \
-    ${gui_runner} mrview ${output} \
-      -mode 2 \
-      -capture.prefix ${png_pfx}_ \
-      -capture.folder ${QC_DIR} \
-      -capture.grab \
-      -exit
-
-  popd > /dev/null
+  ### write output CSV ###
+  {
+    echo "MeanAbsMotion,MeanRelMotion,PercentOutliers"
+    echo "${mean_abs_motion},${mean_rel_motion},${percent_outliers}"
+  } > "$output_csv"
 }
 
 pipe_dwi_preprocessing()
@@ -320,9 +381,9 @@ pipe_rpe_preprocessing()
     log "preprocessing RPE B0"
     log "denoising set to null operation"
     run_degibbs "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
-      "${OUT_BASE_DIR}/rpe_dwi_denoised_degibbs.mif"
+      "${OUT_BASE_DIR}/rpe_denoised_degibbs.mif"
 
-    run_qc_residual {OUT_BASE_DIR}/rpe_b0_dwi.mif \
+    run_qc_residual ${OUT_BASE_DIR}/rpe_b0_dwi.mif \
       ${OUT_BASE_DIR}/rpe_denoised_degibbs.mif \
       ${OUT_BASE_DIR}/rpe_denoised_degibbs_residuals.mif \
       ${SUB_ID}_rpe_denoised_degibbs_residuals
@@ -341,14 +402,15 @@ pipe_rpe_preprocessing()
 
 }
 
-pipe_dwipreproc_smart()
+pipe_dwipreproc()
 {
   local input=${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
   local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
-
+  local scratch_dir=${SCRATCH_DIR}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)
+  
   if [[ -n "${RPE_DWI_NII}" ]]; then
     # scenario 3
-    echo "TODO: implement scenario 3"
+    echo "TODO: implement scenario 3 -- scenario 2 should work"
   elif [[ -n "${RPE_B0_NII}" ]]; then
     # scenario 2
     local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
@@ -360,83 +422,105 @@ pipe_dwipreproc_smart()
         -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility" \
         -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
         -info \
-        -scratch ${OUT_BASE_DIR}/scratch \
-        -nocleanup \
+        -scratch ${scratch_dir} \
         -nthreads "${THREADS}" \
         -force
-
-      #TODO FIX scratch dir 
   else
     # scenario 1
-    log "Running dwifslpreproc for DWI no RPI acquisition (scenario 1)"
+    log "Running dwifslpreproc for DWI no RPE acquisition (scenario 1)"
     run_if_missing ${output} \
       dwifslpreproc ${input} ${output} \
         -rpe_header \
         -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
         -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
         -info \
-        -scratch ${OUT_BASE_DIR}/scratch \
-        -nocleanup \
+        -scratch ${scratch_dir} \
         -nthreads "${THREADS}" \
         -force
   fi
+
+  cp ${OUT_BASE_DIR}/eddyqc_dir/quad/qc.pdf ${QC_DIR}/${SUB_ID}_quad_eddy_qc.pdf
+  run_quantatitive_eddy_qc
 }
 
 pipe_bias_correct()
 {
   local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
-  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias.mif
+  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4.mif
+  local mask=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_mask.mif
+
+  run_if_missing ${mask} \
+    dwi2mask "${input}" "${mask}" -nthreads "${THREADS}"
 
   run_if_missing "${output}" \
     dwibiascorrect ants "${input}" "${output}" \
+    -mask "${mask}" \
     -nthreads "${THREADS}"
 }
 
 pipe_upsample()
 {
-  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias.mif
-  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias_upsample.mif
+  local regrid_size_formatted=$(echo ${REGRID_SIZE} | sed 's/,/_/g')
+  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4.mif
+  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4_${regrid_size_formatted}.mif
   
-  run_if_missing "${output}" \
-    mrgrid "${input}" \
-      regrid -voxel 1.25 "${output}"\
-      -interp sinc -force -nthreads "${THREADS}" 
+  ### upsample if needed, otherwise symlink ###
+  current_spacing=$(mrinfo "${input}" -spacing | cut -d' ' -f 1-3 | sed "s/ /,/g")
+  if [[ "$current_spacing" != "${REGRID_SIZE}" ]]; then
+    run_if_missing "${output}" \
+      mrgrid "${input}" regrid -voxel ${REGRID_SIZE} "${output}" \
+      -interp linear -force -nthreads "${THREADS}"
+  else
+    log "Regrid size ${REGRID_SIZE} already matches input spacing ${current_spacing}"
+    run_if_missing "${output}" \
+       ln -s "$(realpath "${input}")" "${output}"
+  fi
 }
 
 pipe_tensor_fit()
 {
-  local input="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_bias_upsample.mif"
-  local output_dir="${OUT_BASE_DIR}/tensor_fit_upsample"
-
+  local regrid_size_formatted=$(echo ${REGRID_SIZE} | sed 's/,/_/g')
+  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4_${regrid_size_formatted}.mif 
+  local output_dir="${OUT_BASE_DIR}/tensor_fit_${regrid_size_formatted}"
+  local mask="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_mask.mif"
+  local mask_regrid=${output_dir}/dwi_mask.nii.gz
+  
   mkdir -p "${output_dir}"
 
-  local dwi_nii="${output_dir}/dwi_upsampled.nii.gz"
-  local bvec="${output_dir}/dwi_upsampled.bvecs"
-  local bval="${output_dir}/dwi_upsampled.bvals"
-  local mrtrix_grad="${output_dir}/dwi_upsampled_grad_table"
-
-  ### convert .mif to .nii.gz and export gradient files ###
+  ### convert to nifti for dti fit ###
+  local dwi_nii="${output_dir}/dwi.nii.gz"
+  local bvec="${output_dir}/dwi.bvecs"
+  local bval="${output_dir}/dwi.bvals"
+  local mrtrix_grad="${output_dir}/dwi_grad_table"
   run_if_missing "${dwi_nii}" \
     mrconvert "${input}" "${dwi_nii}" \
       -export_grad_fsl "${bvec}" "${bval}" \
       -export_grad_mrtrix "${mrtrix_grad}" \
       -nthreads "${THREADS}" -info
 
-  bet "${dwi_nii}"  "${output_dir}"/dwi_upsampled_mask.nii.gz -f 0.3
+  ### resize mask ###
+  run_if_missing "${mask_regrid}" \
+    mrgrid ${mask} \
+      regrid -voxel ${REGRID_SIZE} ${mask_regrid} \
+      -interp nearest -force -nthreads "${THREADS}"
 
   ### run DTI fitting ###
-  run_if_missing "${output_dir}/dti_FA.nii.gz" \
+  run_if_missing "${output_dir}/dwi_FA.nii.gz" \
     dtifit \
       --data="${dwi_nii}" \
-      --out="${output_dir}/dti" \
-      --mask="${output_dir}"/dwi_upsampled_mask.nii.gz \
+      --out="${output_dir}/dwi" \
+      --mask="${mask_regrid}" \
       --bvecs="${bvec}" \
       --bvals="${bval}" \
       --save_tensor
+
+  ### generate png of FA image and save to QC_DIR ###
+  run_screen_grab_image ${output_dir}/dwi_FA.nii.gz \
+    ${SUB_ID}_dwi_FA \
 }
 
 #-------------------------------------------------------------------------------
-### MAIN
+### MAIN ###
 #-------------------------------------------------------------------------------
 
 main() 
@@ -456,25 +540,23 @@ main()
   ### start pipeline steps ###
   pipe_mrconvert
 
-  ### run dwi preprocessing ###
+  ### run initial dwi preprocessing ###
   pipe_dwi_preprocessing
 
-  ## run rpe preprocessing (runs only when rpe data is detected) ###
+  ## run initial rpe preprocessing (runs only when rpe data is detected) ###
   pipe_rpe_preprocessing
 
   ### run core dwi preprocessing ###
-  pipe_dwipreproc_smart  
+  pipe_dwipreproc 
 
   ### run bias correction ###
-  #pipe_bias_correct 
+  pipe_bias_correct 
 
   ### run upsampling ###
-  #pipe_upsample
+  pipe_upsample
 
   ### run tensor fitting ###
-  #pipe_tensor_fit
-  
-
+  pipe_tensor_fit
 }
 
 main "$@"
