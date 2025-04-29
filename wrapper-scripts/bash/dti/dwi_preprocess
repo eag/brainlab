@@ -268,8 +268,10 @@ run_screen_grab_image()
   
   ### need xvfb for mrview screenshot if on CC cluster ###
   local gui_runner=""
-  if [[ -n "${CC_CLUSTER}" ]]; then
+  if [[ "${CC_CLUSTER}" == "cedar" ]]; then
     gui_runner="run-xvfb"
+  elif [[ "${CC_CLUSTER}" == "narval" ]]; then
+    gui_runner=xvfb-run
   fi
 
   ### mrview must be run within the output directory to capture images ###
