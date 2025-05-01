@@ -1,19 +1,26 @@
 #!/bin/bash
 
 ### NOTES ###
-# - this script performs standard DTI preprocessing steps most suitable for clinical data
+# - this script performs standard DTI preprocessing steps suitable for clinical data
 # - EPI distortion correction is performed only if RPE data was acquired
 # - expects input as the subject folder containing DTI data from DICOM conversion
 #   - i.e. output from dcm2niix or equivalent (nii.gz, .bval, .bvec, and .json files)
+# - the input folder must contain either:
+#     1. single DTI acquisition, or
+#     2. a single acquisition identified by the prefix <dwi_pfx*>
+# - does not verify that the input data is a DTI scan, otherwise will simply attempt 
+#   to process and fail
 # - processing steps determined primarily from image and json sidecar data found in
-#   the input folder, together with a few user-defined variables and pipeline defaults
+#   the input folder
 
-
-# TODO: currently assumes "b0_1.nii.gz" and "b0_2.nii.gz" suffix for dual b0 acquisitions
+# TODO: 
+# - currently assumes "b0_1.nii.gz" and "b0_2.nii.gz" suffix for dual b0 acquisitions
+# - dual full DTI acquisitions not yet tested/implemented
 
 #===============================================================================
 ### PARSE ARGUMENTS AND SET GLOBAL VARIABLES ###
 #===============================================================================
+
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -30,6 +37,7 @@ parse_arguments() {
       -h|--help)
         echo "Usage: $0 --in_dir DIR --out_dir DIR --scratch_dir DIR --alps_roi_dir DIR"
         echo "          --threads N --dry_run 0|1 --sub_id ID --dwi_pfx PFX --regrid_size X,Y,Z"
+        echo -e "Notes\n  PFX=\"*\" for folders containing a single DTI acquisition"
         exit 0
         ;;
       *)
@@ -51,7 +59,7 @@ parse_arguments() {
     fi
   done
 
-  ### set global variables ###
+  ### set all other global variables ###
   OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
   QC_DIR="${OUT_DIR}/qc"
   LOG_DIR="${OUT_DIR}/logs"
@@ -60,21 +68,10 @@ parse_arguments() {
 }
 
 
-#IN_DIR="${HOME}/tmp/test_datasets_dti/organized"
-#OUT_DIR="${HOME}/tmp/test_datasets_dti/derivatives/dti"
-#SCRATCH_DIR="${HOME}/tmp/test"
-#ALPS_ROI_DIR="${HOME}/tmp/test_datasets_dti/alps-rois"
-#THREADS=3
-#DRY_RUN=1
-#SUB_ID="BEM01_BYC_5002"
-#DWI_PFX="dwi"
-#REGRID_SIZE="1,1,1" 
-
 #-------------------------------------------------------------------------------
-### SCRIPT CONFIG - GLOBAL VARIABLES ###
+### GLOBAL VARIABLES (auto-filled later) ###
 #-------------------------------------------------------------------------------
 
-### input variables, autofilled later ###
 PRIMARY_DTI_NII=""
 PRIMARY_DTI_BVAL=""
 PRIMARY_DTI_BVEC=""
@@ -89,7 +86,6 @@ RPE_B0_1_JSON=""
 RPE_B0_2_JSON=""
 RPE_MIF=""
 SLICE_OR=""
-
 
 #-------------------------------------------------------------------------------
 ### HELPER FUNCTIONS ###
@@ -192,8 +188,7 @@ setup_output_directories()
 #-------------------------------------------------------------------------------
 
 run_enforce_pe_convention() {
-  ### for dual acquistions with two bvecs ###
-  ### TODO: currently untested (no test data available) ###
+  ### TODO: implement for for dual acquistions with two bvecs ###
   if [[ -f "${PRIMARY_DTI_JSON}" && -f "${RPE_JSON}" ]]; then
     local pe_primary
     local pe_rpe
@@ -249,7 +244,7 @@ detect_dti_files() {
 
     if [[ -f "${RPE_B0_1}" && -f "${RPE_B0_1_JSON}" && -f "${RPE_B0_2}" && -f "${RPE_B0_2_JSON}" ]]; then
       log "Found two RPE b0 images, generating combined rpe.mif"
-      RPE_MIF="${OUT_DIR}/${SUB_ID}/${DWI_PFX}_detected_combined_rpe.mif"
+      RPE_MIF="${OUT_DIR}/${SUB_ID}/dwi_detected_combined_rpe.mif"
       run_if_missing "${RPE_MIF}" \
         run_create_combined_rpe "${RPE_B0_1}" "${RPE_B0_1_JSON}" "${RPE_B0_2}" "${RPE_B0_2_JSON}" "${RPE_MIF}"
     fi
@@ -263,6 +258,11 @@ detect_dti_files() {
     json="${base}.json"
 
     if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
+      if ! jq -e 'has("PhaseEncodingDirection")' "$json" > /dev/null; then
+        log "ERROR: PhaseEncodingDirection missing in ${json}"
+        log "Please add first, inferring from PhaseEncodingAxis + ImageOrientationPatientDICOM"
+        exit 1
+      fi
       PRIMARY_DTI_NII="${nii}"
       PRIMARY_DTI_BVAL="${bval}"
       PRIMARY_DTI_BVEC="${bvec}"
@@ -282,10 +282,7 @@ detect_dti_files() {
       json="${base}.json"
 
       if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
-        log "Found second DTI scan: WARNING untested scenario"
-        run_enforce_pe_convention
-        RPE_MIF="${OUT_DIR}/${SUB_ID}/${DWI_PFX}_detected_rpe.mif"
-        run_create_rpe "${nii}" "${json}" "${RPE_MIF}"
+        log "Found second DTI scan: ERROR -- not yet implemented"
         break
       fi
     done
@@ -303,7 +300,7 @@ detect_dti_files() {
       if [[ -f "${json}" && ! -f "${bval}" && ! -f "${bvec}" ]]; then
         log "Found single-volume B0"
         RPE_DWI_NII="${nii}"
-        RPE_MIF="${OUT_DIR}/${SUB_ID}/${DWI_PFX}_detected_rpe.mif"
+        RPE_MIF="${OUT_DIR}/${SUB_ID}/dwi_detected_rpe.mif"
         run_create_rpe "${nii}" "${json}" "${RPE_MIF}"
         break
       fi
@@ -461,13 +458,14 @@ run_degibbs()
   run_if_missing "${output}" \
     mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
 }
+
 run_screen_grab_image()
 {
+  ### generate png of "input" with "output_pnf_pfx" in QC_DIR with optional "overlay" ###
   local input="$1"
   local output_png_pfx="$2"
   local overlay="$3"
-  local output_dir=$(dirname "${input}")
-
+ 
   local gui_runner=""
   if [[ "${CC_CLUSTER}" == "cedar" ]]; then
     gui_runner="run-xvfb"
@@ -480,8 +478,6 @@ run_screen_grab_image()
     exit 1
   fi
 
-  pushd "${output_dir}" > /dev/null
-
   local cmd="${gui_runner} mrview ${input}"
   if [[ -n "${overlay}" ]]; then
     cmd+=" -overlay.load ${overlay} -overlay.opacity 0.5 -overlay.colourmap 1"
@@ -491,13 +487,12 @@ run_screen_grab_image()
   run_if_missing "${QC_DIR}/${output_png_pfx}_0000.png" \
     run_if_exists "${input}" \
       bash -c "${cmd}"
-
-  popd > /dev/null
 }
-
 
 run_qc_residual() 
 {
+  ### generate residual image "output" from "original" and "processed" images ###
+  ### save png of residual image with "png_pfx" in QC_DIR ###
   local original=$1
   local processed=$2
   local output=$3
@@ -592,25 +587,8 @@ pipe_rpe_preprocessing()
       ${SUB_ID}_rpe_denoised_degibbs_residuals
   fi
 
-  ### preprocess rpe_dwi, if available (scenario 3) ###
-  #if [[ -n "${RPE_DWI_NII}" ]]; then
-  #  log "preprocessing RPE DWI"
-  #
-  #  run_dwidenoise "${OUT_BASE_DIR}/rpe_dwi.mif" \
-  #    "${OUT_BASE_DIR}/rpe_dwi_denoised.mif"
-  #  
-  #  run_degibbs "${OUT_BASE_DIR}/rpe_dwi_denoised.mif" \
-  #    "${OUT_BASE_DIR}/rpe_dwi_denoised_degibbs.mif"
+  ### TODO: implement scenario 3 ###
 
-  ### qc residuals ###
-  # run_qc_residual ${OUT_BASE_DIR}/rpe_b0_dwi.mif \
-  #   ${OUT_BASE_DIR}/rpe_denoised_degibbs.mif \
-  #   ${OUT_BASE_DIR}/rpe_denoised_degibbs_residuals.mif \
-  #   ${SUB_ID}_rpe_denoised_degibbs_residuals
-
-  #fi
-
-  
 }
 
 pipe_dwipreproc()
@@ -759,7 +737,7 @@ pipe_tbss()
 
   ### Step 2: Register FA to FMRIB58 template ###
   log "Step 2: TBSS registration"
-  run_if_missing "FA/${fa_base}_to_target_warp.nii.gz" \
+  run_if_missing "FA/dwi_to_target_warp.nii.gz" \
     tbss_2_reg -T
 
   ### Step 3: Post-registration and skeleton ###
@@ -774,85 +752,73 @@ pipe_tbss()
 
   ### Step 5: Non-FA projection (tensor) ###
   log "Step 5: TBSS non-FA projection (tensor)"
-  run_if_missing "FA/dwi_to_target_tensor.nii.gz"
+  run_if_missing "FA/dwi_to_target_tensor.nii.gz" \
     tbss_non_FA tensor
 
   ### QC snapshot ###
-  run_screen_grab_image "stats/mean_FA_skeleton.nii.gz" \
-    "${SUB_ID}_tbss_skeleton" "stats/mean_FA.nii.gz"
+  run_screen_grab_image "${tbss_dir}/stats/mean_FA_skeleton.nii.gz" \
+    ${SUB_ID}_tbss_skeleton
 
   popd > /dev/null
 }
 
-
 pipe_alps_extract()
 {
-  log "Running ALPS extraction"
+ log "Running ALPS extraction"
 
-  local tensor_projected="${OUT_BASE_DIR}/tbss/FA/dwi_to_target_tensor.nii.gz"
+  local tbss_tensor="${OUT_BASE_DIR}/tbss/FA/dwi_to_target_tensor.nii.gz"
   local alps_dir="${OUT_BASE_DIR}/alps"
   local tensor_dir="${alps_dir}/tensor"
-  local output_csv="${alps_dir}/alps_metrics.csv"
+  local comp_nifti="${tensor_dir}/tensor_components.nii.gz"
+  local tensor_csv="${alps_dir}/alps_tensor_components.csv"
+  local index_csv="${alps_dir}/alps_indices.csv"
+
+  if [[ -f ${index_csv} ]]; then
+    log "ALPS indices already exist, skipping extraction"
+    return
+  fi
 
   mkdir -p "${tensor_dir}"
 
   # Disassemble tensor components
-  cp "${tensor_projected}" "${tensor_dir}/FA.nii.gz"
-  ImageMath 4 "${tensor_dir}/tensor_comp.nii.gz" TimeSeriesDisassemble "${tensor_dir}/FA.nii.gz"
+  cp "${tbss_tensor}" "${tensor_dir}/tensor.nii.gz"
+  ImageMath 4 "${comp_nifti}" TimeSeriesDisassemble "${tensor_dir}/tensor.nii.gz"
 
+  # Rename components
   local i=0
   for comp in xx xy xz yy yz zz; do
-    mv "${tensor_dir}/tensor_comp100${i}.nii.gz" "${tensor_dir}/tensor_D${comp}.nii.gz"
-    i=$((i+1))
+    mv "${tensor_dir}/tensor_components100${i}.nii.gz" "${tensor_dir}/D${comp}.nii.gz"
+    ((i++))
   done
 
-  # Extract mean values from each ROI
-  L_Dxproj=$(fslstats "${tensor_dir}/tensor_Dxx.nii.gz" -k "${ALPS_ROI_DIR}/L_hemi_proj.nii.gz" -m)
-  L_Dxassoc=$(fslstats "${tensor_dir}/tensor_Dxx.nii.gz" -k "${ALPS_ROI_DIR}/L_hemi_assoc.nii.gz" -m)
-  L_Dyproj=$(fslstats "${tensor_dir}/tensor_Dyy.nii.gz" -k "${ALPS_ROI_DIR}/L_hemi_proj.nii.gz" -m)
-  L_Dzassoc=$(fslstats "${tensor_dir}/tensor_Dzz.nii.gz" -k "${ALPS_ROI_DIR}/L_hemi_assoc.nii.gz" -m)
-  R_Dxproj=$(fslstats "${tensor_dir}/tensor_Dxx.nii.gz" -k "${ALPS_ROI_DIR}/R_hemi_proj.nii.gz" -m)
-  R_Dxassoc=$(fslstats "${tensor_dir}/tensor_Dxx.nii.gz" -k "${ALPS_ROI_DIR}/R_hemi_assoc.nii.gz" -m)
-  R_Dyproj=$(fslstats "${tensor_dir}/tensor_Dyy.nii.gz" -k "${ALPS_ROI_DIR}/R_hemi_proj.nii.gz" -m)
-  R_Dzassoc=$(fslstats "${tensor_dir}/tensor_Dzz.nii.gz" -k "${ALPS_ROI_DIR}/R_hemi_assoc.nii.gz" -m)
+  # Extract mean values for each ROI
+  declare -A vals
+  for hemi in L R; do
+    vals[${hemi}_Dxproj]=$(fslstats "${tensor_dir}/Dxx.nii.gz" -k "${ALPS_ROI_DIR}/${hemi}_hemi_proj.nii.gz" -m)
+    vals[${hemi}_Dxassoc]=$(fslstats "${tensor_dir}/Dxx.nii.gz" -k "${ALPS_ROI_DIR}/${hemi}_hemi_assoc.nii.gz" -m)
+    vals[${hemi}_Dyproj]=$(fslstats "${tensor_dir}/Dyy.nii.gz" -k "${ALPS_ROI_DIR}/${hemi}_hemi_proj.nii.gz" -m)
+    vals[${hemi}_Dzassoc]=$(fslstats "${tensor_dir}/Dzz.nii.gz" -k "${ALPS_ROI_DIR}/${hemi}_hemi_assoc.nii.gz" -m)
+  done
 
   # Compute ALPS indices
-  L_ALPS=$(echo "scale=4; (${L_Dxproj} + ${L_Dxassoc}) / (${L_Dyproj} + ${L_Dzassoc})" | bc)
-  R_ALPS=$(echo "scale=4; (${R_Dxproj} + ${R_Dxassoc}) / (${R_Dyproj} + ${R_Dzassoc})" | bc)
+  L_ALPS=$(echo "scale=4; (${vals[L_Dxproj]} + ${vals[L_Dxassoc]}) / (${vals[L_Dyproj]} + ${vals[L_Dzassoc]})" | bc)
+  R_ALPS=$(echo "scale=4; (${vals[R_Dxproj]} + ${vals[R_Dxassoc]}) / (${vals[R_Dyproj]} + ${vals[R_Dzassoc]})" | bc)
 
-  # Write to CSV all above values
+  # Save tensor values CSV
   {
     echo "Subject,L_Dxproj,L_Dxassoc,L_Dyproj,L_Dzassoc,R_Dxproj,R_Dxassoc,R_Dyproj,R_Dzassoc"
-    echo "${SUB_ID},${L_Dxproj},${L_Dxassoc},${L_Dyproj},${L_Dzassoc},${R_Dxproj},${R_Dxassoc},${R_Dyproj},${R_Dzassoc}"
-  } > "${alps_dir}/alps_tensor_components.csv"  
-  
-  # Write to CSV ALPS indices
+    echo "${SUB_ID},${vals[L_Dxproj]},${vals[L_Dxassoc]},${vals[L_Dyproj]},${vals[L_Dzassoc]},"\
+        "${vals[R_Dxproj]},${vals[R_Dxassoc]},${vals[R_Dyproj]},${vals[R_Dzassoc]}"
+  } > "${tensor_csv}"
+
+  # Save ALPS index CSV
   {
     echo "Subject,L_ALPS,R_ALPS"
     echo "${SUB_ID},${L_ALPS},${R_ALPS}"
-  } > "${output_csv}"
+  } > "${index_csv}"
 
-  log "ALPS extraction complete: ${output_csv}"
-}
+  log "ALPS extraction complete: ${index_csv}"
 
-
-pipe_cleanup()
-{
-  log "Cleaning up intermediate files"
-
-  rm -f "${OUT_BASE_DIR}"/dwi*.mif
-  rm -f "${OUT_BASE_DIR}"/eddyqc_dir/eddy_outlier_*.nii.gz
-  rm -f "${OUT_BASE_DIR}"/eddyqc_dir/eddy_mask.nii
-  rm -f "${OUT_BASE_DIR}"/dwi_denoised_*_residuals.mif
-
-  # optionally remove tbss logs and slicesdir
-  rm -rf "${OUT_BASE_DIR}/tbss/FA/tbss_logs"
-  tar czf "${OUT_BASE_DIR}/tbss_slicesdir.tar.gz" -C "${OUT_BASE_DIR}/tbss/FA" slicesdir
-  rm -rf "${OUT_BASE_DIR}/tbss/FA/slicesdir"
-
-  # optionally remove disassembled FA
-  rm -f "${OUT_BASE_DIR}/alps/tensor/FA.nii.gz"
-  rm -f "${OUT_BASE_DIR}/alps/tensor/tensor_comp*.nii.gz"
 }
 
 #-------------------------------------------------------------------------------
@@ -909,9 +875,6 @@ main()
 
   ### run alps extraction ###
   pipe_alps_extract
-
-  ### run cleanup ###
-  #pipe_cleanup
 
   ### end pipeline ###
   local end_time=$(date +%s)
