@@ -7,19 +7,23 @@ dry_run=0
 regrid_size="1,1,1" 
 
 # no PE in sidecar
-#sub_ids="002_S_0413"
+sub_ids="002_S_0413"
+dwi_pfx="*"
+dry_run=0
+
+# BEAM TEST
+sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
+dwi_pfx="dwi"
+dry_run=0
+
+# ONDRI LEDUCQ TEST
+#sub_ids="sub-OND01BYC1006-sess-BL sub-OND01BYC1009_ses-BL BCSA1F001"
 #dwi_pfx="*"
 #dry_run=0
 
-# BEAM TEST
-#sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
-#dwi_pfx="dwi"
+#sub_ids="sub-OND01BYC1006-sess-BL"
+#dwi_pfx="*"
 #dry_run=0
-
-# ONDRI LEDUCQ TEST
-sub_ids="sub-OND01BYC1006-sess-BL sub-OND01BYC1009_ses-BL BCSA1F001"
-dwi_pfx="*"
-dry_run=0
 
 
 

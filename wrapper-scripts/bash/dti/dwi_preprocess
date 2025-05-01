@@ -6,8 +6,8 @@
 # - expects input as the subject folder containing DTI data from DICOM conversion
 #   - i.e. output from dcm2niix or equivalent (nii.gz, .bval, .bvec, and .json files)
 # - the input folder must contain either:
-#     1. single DTI acquisition, or
-#     2. a single acquisition identified by the prefix <dwi_pfx*>
+#     1. a single DTI acquisition, or
+#     2. a DTI acquisition uniquely identified by the prefix <dwi_pfx*>
 # - does not verify that the input data is a DTI scan, otherwise will simply attempt 
 #   to process and fail
 # - processing steps determined primarily from image and json sidecar data found in
@@ -21,7 +21,8 @@
 ### PARSE ARGUMENTS AND SET GLOBAL VARIABLES ###
 #===============================================================================
 
-parse_arguments() {
+parse_arguments() 
+{
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --in_dir|--out_dir|--scratch_dir|--alps_roi_dir|--threads|--dry_run|--sub_id|--dwi_pfx|--regrid_size)
@@ -67,7 +68,6 @@ parse_arguments() {
   REGRID_SIZE_FORMATTED=$(echo "${REGRID_SIZE}" | sed 's/,/_/g')
 }
 
-
 #-------------------------------------------------------------------------------
 ### GLOBAL VARIABLES (auto-filled later) ###
 #-------------------------------------------------------------------------------
@@ -104,6 +104,7 @@ setup_environment()
     module load mrtrix/3.0.4
     module load fsl/6.0.7.7
   else
+    ### TODO: update for local environment ###
     export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
     export PATH=${PATH}:${ANTSPATH}
   fi
@@ -183,12 +184,23 @@ setup_output_directories()
   : > "${LOG_FN}" 
 }
 
+check_exit() 
+{
+  local status=$1
+  local msg=$2
+  if [[ $status -ne 0 ]]; then
+    log "ERROR: $msg"
+    exit $status
+  fi
+}
+
 #-------------------------------------------------------------------------------
 ### CONFIG FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
-run_enforce_pe_convention() {
-  ### TODO: implement for for dual acquistions with two bvecs ###
+run_enforce_pe_convention() 
+{
+  ### TODO: finish implementing (for for dual acquistions with two bvecs) ###
   if [[ -f "${PRIMARY_DTI_JSON}" && -f "${RPE_JSON}" ]]; then
     local pe_primary
     local pe_rpe
@@ -222,7 +234,6 @@ run_enforce_pe_convention() {
     fi
   fi
 }
-
 
 detect_dti_files() {
   pushd "${IN_DIR}/${SUB_ID}" > /dev/null
@@ -272,7 +283,7 @@ detect_dti_files() {
   done
 
   ### if no rpe.mif (b0_1/b0_2), look for second full DTI scan ###
-  # TODO: untested
+  # TODO: implement
   if [[ -z "${RPE_MIF}" ]]; then
     for nii in ${DWI_PFX}*.nii.gz; do
       [[ "$nii" == "${PRIMARY_DTI_NII}" ]] && continue
@@ -392,7 +403,6 @@ detect_slice_orientation_from_json()
 # - "pipe_" : pipeline functions that operate on staged filenames
 # - "run_"  : utility functions used by pipe functions with filenames as arguments
 
-
 run_create_rpe()
 {
   local nii="$1"
@@ -406,6 +416,7 @@ run_create_rpe()
 
   run_if_missing "${out_mif}" \
     mrconvert "${nii}" "${out_mif}" -json_import "${json}" -quiet -force
+  check_exit $? "mrconvert failed for ${nii}"
 }
 
 run_create_combined_rpe() {
@@ -431,6 +442,7 @@ run_create_combined_rpe() {
   mrconvert "${b0_1}" "${tmp1}" -json_import "${b0_1_json}" -quiet -force
   mrconvert "${b0_2}" "${tmp2}" -json_import "${b0_2_json}" -quiet -force
   mrcat "${tmp1}" "${tmp2}" -axis 3 "${out_mif}" -quiet -force
+  check_exit $? "create combined rpe failed"
 
   rm -f "${tmp1}" "${tmp2}"
 }
@@ -442,6 +454,7 @@ run_dwidenoise()
   local output="$2"
   run_if_missing "${output}" \
     dwidenoise "${input}" "${output}" -nthreads "${THREADS}"
+  check_exit $? "dwidenoise failed for ${input}"
 }
 
 run_degibbs() 
@@ -457,6 +470,7 @@ run_degibbs()
   
   run_if_missing "${output}" \
     mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
+  check_exit $? "mrdegibbs failed for ${input}"
 }
 
 run_screen_grab_image()
@@ -473,20 +487,18 @@ run_screen_grab_image()
     gui_runner=xvfb-run
   fi
 
-  if [[ -n "${overlay}" && ! -f "${overlay}" ]]; then
-    log "ERROR: Overlay file ${overlay} does not exist"
-    exit 1
-  fi
-
   local cmd="${gui_runner} mrview ${input}"
   if [[ -n "${overlay}" ]]; then
     cmd+=" -overlay.load ${overlay} -overlay.opacity 0.5 -overlay.colourmap 1"
   fi
   cmd+=" -mode 2 -capture.prefix ${output_png_pfx}_ -capture.folder ${QC_DIR} -capture.grab -exit"
 
-  run_if_missing "${QC_DIR}/${output_png_pfx}_0000.png" \
-    run_if_exists "${input}" \
-      bash -c "${cmd}"
+  if [[ ! -e "${QC_DIR}/${output_png_pfx}_0000.png" && -e "${input}" && ( -z "${overlay}" || -e "${overlay}" ) ]]; then
+    log "Running: ${cmd}"
+    bash -c "${cmd}"
+  else
+    log "Skipping QC image generation: output already exists or input/overlay missing"
+  fi
 }
 
 run_qc_residual() 
@@ -513,6 +525,7 @@ pipe_mrconvert()
       -fslgrad ${PRIMARY_DTI_BVEC} ${PRIMARY_DTI_BVAL} \
       -json_import ${PRIMARY_DTI_JSON} \
       -nthreads "${THREADS}"
+   check_exit $? "mrconvert failed for ${PRIMARY_DTI_NII}"
 }
 
 run_quantatitive_eddy_qc()
@@ -574,7 +587,7 @@ pipe_dwi_preprocessing()
 
 pipe_rpe_preprocessing()
 {
-  ### preprocess rpe_b0, if available (scenario 2) ###
+  ### preprocess rpe, if available (scenario 2) ###
   if [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" ]]; then
     log "preprocessing RPE B0"
     log "denoising set to null operation"
@@ -597,13 +610,14 @@ pipe_dwipreproc()
   local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
   local scratch_dir=${SCRATCH_DIR}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)
   
-  if [[ -n "${RPE_DWI_NII}" ]]; then
+  if [[ -f "${RPE_MIF}" && -n "${RPE_BVEC}" ]]; then
     # scenario 3
-    echo "TODO: implement scenario 3 -- scenario 2 should work"
-  elif [[ -n "${RPE_B0_NII}" ]]; then
+    log "TODO: implement scenario 3 -- scenario 2 should work"
+    exit 1
+  elif [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" ]]; then
     # scenario 2
-    local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
     log "Running dwifslpreproc for DWI RPE B0 acquistion (scenario 2)"
+    local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
     run_if_missing "${output}" \
       dwifslpreproc ${input} ${output} \
         -rpe_header \
@@ -614,6 +628,7 @@ pipe_dwipreproc()
         -scratch ${scratch_dir} \
         -nthreads "${THREADS}" \
         -force
+    check_exit $? "dwifslpreproc failed for ${input}"
   else
     # scenario 1
     log "Running dwifslpreproc for DWI no RPE acquisition (scenario 1)"
@@ -626,6 +641,7 @@ pipe_dwipreproc()
         -scratch ${scratch_dir} \
         -nthreads "${THREADS}" \
         -force
+    check_exit $? "dwifslpreproc failed for ${input}"
   fi
 
   ### QC dwifslpreproc ###
@@ -651,6 +667,7 @@ pipe_bias_correct()
     -mask "${mask}" \
     -nthreads "${THREADS}" \
     -scratch "${SCRATCH_DIR}" 
+  check_exit $? "dwibiascorrect failed for ${input}"
 }
 
 pipe_upsample()
@@ -663,7 +680,8 @@ pipe_upsample()
   if [[ "$current_spacing" != "${REGRID_SIZE}" ]]; then
     run_if_missing "${output}" \
       mrgrid "${input}" regrid -voxel ${REGRID_SIZE} "${output}" \
-      -interp linear -force -nthreads "${THREADS}"
+        -interp linear -force -nthreads "${THREADS}"
+      check_exit $? "mrgrid failed for ${input}"
   else
     log "Regrid size ${REGRID_SIZE} already matches input spacing ${current_spacing}"
     run_if_missing "${output}" \
@@ -706,6 +724,7 @@ pipe_tensor_fit()
       --bvecs="${bvec}" \
       --bvals="${bval}" \
       --save_tensor
+  check_exit $? "dtifit failed for ${dwi_nii}"
 
   ### generate png of FA image and save to QC_DIR ###
   run_screen_grab_image ${output_dir}/dwi_FA.nii.gz \
@@ -734,26 +753,31 @@ pipe_tbss()
   log "Step 1: TBSS preprocessing"
   run_if_missing "FA/slicesdir/index.html" \
     tbss_1_preproc FA
+  check_exit $? "tbss_1_preproc failed for ${fa_image}"
 
   ### Step 2: Register FA to FMRIB58 template ###
   log "Step 2: TBSS registration"
-  run_if_missing "FA/dwi_to_target_warp.nii.gz" \
+  run_if_missing "FA/dwi_FA_to_target_warp.nii.gz" \
     tbss_2_reg -T
+  check_exit $? "tbss_2_reg failed for ${fa_image}"
 
   ### Step 3: Post-registration and skeleton ###
   log "Step 3: TBSS post-registration"
   run_if_missing "stats/all_FA.nii.gz" \
     tbss_3_postreg -S
+  check_exit $? "tbss_3_postreg failed for ${fa_image}"
 
   ### Step 4: Threshold mean FA skeleton ###
   log "Step 4: TBSS skeleton thresholding"
   run_if_missing "stats/mean_FA_skeleton_mask_dst.nii.gz" \
     tbss_4_prestats 0.2
+  check_exit $? "tbss_4_prestats failed for ${fa_image}"
 
   ### Step 5: Non-FA projection (tensor) ###
   log "Step 5: TBSS non-FA projection (tensor)"
   run_if_missing "FA/dwi_to_target_tensor.nii.gz" \
     tbss_non_FA tensor
+  check_exit $? "tbss_non_FA failed for ${tensor_image}"
 
   ### QC snapshot ###
   run_screen_grab_image "${tbss_dir}/stats/mean_FA_skeleton.nii.gz" \
