@@ -12,42 +12,63 @@
 # TODO: currently assumes "b0_1.nii.gz" and "b0_2.nii.gz" suffix for dual b0 acquisitions
 
 #===============================================================================
-### DATASET CONFIG - GLOBAL VARIABLES ###
+### PARSE ARGUMENTS AND SET GLOBAL VARIABLES ###
 #===============================================================================
+parse_arguments() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --in_dir|--out_dir|--scratch_dir|--alps_roi_dir|--threads|--dry_run|--sub_id|--dwi_pfx|--regrid_size)
+        flag=$(echo "${1#--}" | tr '[:lower:]' '[:upper:]')  # e.g., in_dir -> IN_DIR
+        value="$2"
+        if [[ -z "$value" || "$value" == --* ]]; then
+          echo "ERROR: Missing value for $1" >&2
+          exit 1
+        fi
+        declare -g "${flag}=$value"  # sets global variable like IN_DIR="/path"
+        shift 2
+        ;;
+      -h|--help)
+        echo "Usage: $0 --in_dir DIR --out_dir DIR --scratch_dir DIR --alps_roi_dir DIR"
+        echo "          --threads N --dry_run 0|1 --sub_id ID --dwi_pfx PFX --regrid_size X,Y,Z"
+        exit 0
+        ;;
+      *)
+        echo "ERROR: Unknown argument: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
 
-IN_DIR="${HOME}/tmp/test_datasets_dti/organized"
-OUT_DIR="${HOME}/tmp/test_datasets_dti/derivatives/dti"
+  ### confirm all required global variables are set ###
+  required_vars=(
+    IN_DIR OUT_DIR SCRATCH_DIR ALPS_ROI_DIR
+    THREADS DRY_RUN SUB_ID DWI_PFX REGRID_SIZE
+  )
+  for var in "${required_vars[@]}"; do
+    if [[ -z "${!var}" ]]; then
+      echo "ERROR: Missing required argument --$(echo "$var" | tr '[:upper:]' '[:lower:]')" >&2
+      exit 1
+    fi
+  done
 
-#IN_DIR="${SCRATCH}/organized"
-#OUT_DIR="${SCRATCH}/derivatives/dti"
-
-SUB_ID="BEM01_BYC_5002"
-DWI_PFX="dwi"
-
-#SUB_ID="sub-OND01BYC1006-sess-BL"
-#DWI_PFX="DTI"
-
-#SUB_ID="BEM01_CAM_5035_01_SE01_MR"
-#DWI_PFX="DTI"
-
-#SUB_ID="BCSA1F001"
-#DWI_PFX="DTI"
-
-#SUB_ID="empty"
-#DWI_PFX="dd"
-
-SCRATCH_DIR=${HOME}/tmp/
-#SCRATCH_DIR=${SCRATCH}
-
-QC_DIR="${OUT_DIR}/qc"
-LOG_DIR="${OUT_DIR}/logs"
-LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
+  ### set global variables ###
+  OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
+  QC_DIR="${OUT_DIR}/qc"
+  LOG_DIR="${OUT_DIR}/logs"
+  LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
+  REGRID_SIZE_FORMATTED=$(echo "${REGRID_SIZE}" | sed 's/,/_/g')
+}
 
 
-ALPS_ROI_DIR=${HOME}/tmp/test_datasets_dti/alps-rois
-THREADS=3
-DRY_RUN=1
-
+#IN_DIR="${HOME}/tmp/test_datasets_dti/organized"
+#OUT_DIR="${HOME}/tmp/test_datasets_dti/derivatives/dti"
+#SCRATCH_DIR="${HOME}/tmp/test"
+#ALPS_ROI_DIR="${HOME}/tmp/test_datasets_dti/alps-rois"
+#THREADS=3
+#DRY_RUN=1
+#SUB_ID="BEM01_BYC_5002"
+#DWI_PFX="dwi"
+#REGRID_SIZE="1,1,1" 
 
 #-------------------------------------------------------------------------------
 ### SCRIPT CONFIG - GLOBAL VARIABLES ###
@@ -69,31 +90,18 @@ RPE_B0_2_JSON=""
 RPE_MIF=""
 SLICE_OR=""
 
-### output variables ###
-OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
-
-### pipeline defaults (for consistency across studies) ###
-REGRID_SIZE="1,1,1" 
-
-### convenience variables ###
-REGRID_SIZE_FORMATTED=$(echo "${REGRID_SIZE}" | sed 's/,/_/g')
 
 #-------------------------------------------------------------------------------
 ### HELPER FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
-function log() 
+log() 
 { 
   echo "[$(date '+%F %T')] $*" | tee -a "${LOG_FN}"; 
 }
 
-function setup_environment
+setup_environment()
 {
-  if [[ ! -d "${IN_DIR}/${SUB_ID}" ]]; then
-    echo "ERROR: Input directory ${IN_DIR}/${SUB_ID} does not exist"
-    exit 1
-  fi
-
   if [[ -n ${CC_CLUSTER} ]]; then
     log "Running on CC cluster: ${CC_CLUSTER}"
     module load ants/2.5.0
@@ -103,6 +111,47 @@ function setup_environment
     export ANTSPATH=${HOME}/work/code/external-tools/ants/build/ANTS-build/Examples
     export PATH=${PATH}:${ANTSPATH}
   fi
+}
+
+setup_directories()
+{
+  ### check existence of required input directories ###
+  declare -A REQUIRED_DIRS=(
+    ["Input directory"]="${IN_DIR}/${SUB_ID}"
+    ["Scratch directory"]="${SCRATCH_DIR}"
+    ["ALPS ROI directory"]="${ALPS_ROI_DIR}"
+  )
+
+  for label in "${!REQUIRED_DIRS[@]}"; do
+    dir="${REQUIRED_DIRS[$label]}"
+    if [[ ! -d "${dir}" ]]; then
+      echo "ERROR: ${label} does not exist: ${dir}" >&2
+      exit 1
+    fi
+  done
+
+  ### create output directories  ###
+  for dir in "${OUT_BASE_DIR}" "${QC_DIR}" "${LOG_DIR}"; do
+    mkdir -p "${dir}" || 
+    {
+      echo "ERROR: Failed to create output directory: ${dir}" >&2
+      exit 1
+    }
+  done
+
+  ### check writability of output directories ###
+  declare -A WRITABLE_DIRS=(
+    ["Scratch directory"]="${SCRATCH_DIR}"
+    ["Output base directory"]="${OUT_BASE_DIR}"
+  )
+
+  for label in "${!WRITABLE_DIRS[@]}"; do
+    dir="${WRITABLE_DIRS[$label]}"
+    if [[ ! -w "${dir}" ]]; then
+      echo "ERROR: ${label} not writable: ${dir}" >&2
+      exit 1
+    fi
+  done
 }
 
 run_if_missing() 
@@ -125,6 +174,17 @@ run_if_exists()
     log "Running: $*"
     "$@"
   fi
+}
+
+setup_output_directories()
+{
+  OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
+  QC_DIR="${OUT_DIR}/qc"
+  LOG_DIR="${OUT_DIR}/logs"
+  LOG_FN="${LOG_DIR}/${SUB_ID}_dwi_preprocess.log"
+
+  mkdir -p "${OUT_BASE_DIR}" "${QC_DIR}" "${LOG_DIR}"
+  : > "${LOG_FN}" 
 }
 
 #-------------------------------------------------------------------------------
@@ -172,7 +232,7 @@ run_enforce_pe_convention() {
 detect_dti_files() {
   pushd "${IN_DIR}/${SUB_ID}" > /dev/null
 
-  ### check for more than two DTI files ###
+  ### exit if more than two full DTI acquisitions are found ###
   dti_files=(${DWI_PFX}*.bvec)
   if (( ${#dti_files[@]} > 2 )); then
     log "ERROR: More than two DTI .nii.gz files found — unknown scenario"
@@ -801,11 +861,14 @@ pipe_cleanup()
 
 main() 
 {
+  ### start pipeline ###
+  parse_arguments "$@"
+  setup_environment
+  setup_directories  
   local start_time=$(date +%s)
   log "DTI pipeline STARTED for ${SUB_ID}: time $(date '+%F %T')"
-  
-  setup_environment
-  
+
+
   ### if no primary DTI is set, try to detect it ###
   if [[ -z "${PRIMARY_DTI_NII}" ]]; then
     log "Primary DTI not set: auto-detecting..."
@@ -850,16 +913,14 @@ main()
   ### run cleanup ###
   #pipe_cleanup
 
+  ### end pipeline ###
   local end_time=$(date +%s)
   local elapsed_seconds=$((end_time - start_time))
   local elapsed_minutes=$((elapsed_seconds / 60))
   local remaining_seconds=$((elapsed_seconds % 60))
-
   log "DTI pipeline COMPLETED for ${SUB_ID}: time $(date '+%F %T')"
   log "TOTAL PROCESSING TIME: ${elapsed_minutes} minutes ${remaining_seconds} seconds"
-
 }
-
 
 main "$@"
 
