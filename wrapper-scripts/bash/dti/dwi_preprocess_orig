@@ -18,16 +18,8 @@ OUT_DIR="${HOME}/tmp/test_datasets_dti/derivatives/dti"
 #IN_DIR="${SCRATCH}/organized"
 #OUT_DIR="${SCRATCH}/derivatives/dti"
 
-SUB_ID="BEM01_BYC_5002"
-DWI_PFX="dwi"
-
 SUB_ID="sub-OND01BYC1006-sess-BL"
-DWI_PFX="DTI"
-
-
-
 #SUB_ID="BCSA1F001"
-#DWI_PFX="DTI"
 #SUB_ID="BEM01_CAM_5035_01_SE01_MR"
 
 SCRATCH_DIR=${HOME}/tmp/
@@ -36,6 +28,7 @@ SCRATCH_DIR=${HOME}/tmp/
 ALPS_ROI_DIR=${HOME}/tmp/test_datasets_dti/alps-rois
 
 
+DWI_PFX="DTI"
 THREADS=3
 
 QC_DIR="${OUT_DIR}/qc"
@@ -48,18 +41,14 @@ LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
 
 ### input variables, autofilled later ###
 PRIMARY_DTI_NII=""
+RPE_B0_NII=""
+RPE_DWI_NII=""
+RPE_BVEC=""
+RPE_BVAL=""
 PRIMARY_DTI_BVAL=""
 PRIMARY_DTI_BVEC=""
 PRIMARY_DTI_JSON=""
-RPE_DWI_NII=""
-RPE_BVAL=""
-RPE_BVEC=""
 RPE_JSON=""
-RPE_B0_1=""
-RPE_B0_2=""
-RPE_B0_1_JSON=""
-RPE_B0_2_JSON=""
-RPE_MIF=""
 SLICE_OR=""
 
 ### output variables ###
@@ -123,34 +112,10 @@ run_if_exists()
 #-------------------------------------------------------------------------------
 ### CONFIG FUNCTIONS ###
 #-------------------------------------------------------------------------------
-detect_dti_files() {
+
+detect_dti_files() 
+{
   pushd "${IN_DIR}/${SUB_ID}" > /dev/null
-
-  ### look for b0_1 and b0_2 ###
-  RPE_B0_1=$(ls *b0_1*.nii.gz 2>/dev/null | head -n1)
-  RPE_B0_2=$(ls *b0_2*.nii.gz 2>/dev/null | head -n1)
-
-  if [[ -n "${RPE_B0_1}" && -n "${RPE_B0_2}" ]]; then
-    RPE_B0_1_JSON="${RPE_B0_1%.nii.gz}.json"
-    RPE_B0_2_JSON="${RPE_B0_2%.nii.gz}.json"
-
-    if [[ -f "${RPE_B0_1}" && -f "${RPE_B0_1_JSON}" && -f "${RPE_B0_2}" && -f "${RPE_B0_2_JSON}" ]]; then
-      log "Found two RPE b0 images, generating combined rpe.mif"
-      RPE_MIF="${OUT_DIR}/${SUB_ID}/${DWI_PFX}_detected_combined_rpe.mif"
-      
-      run_if_missing "${RPE_MIF}" \
-        bash -c "
-          local tmp1=$(mktemp "$(pwd)/tmp_rpe_$(date +%Y%m%d)_XXXXXX.mif")
-          local tmp2=$(mktemp "$(pwd)/tmp_rpe_$(date +%Y%m%d)_XXXXXX.mif")
-          mrconvert \"${RPE_B0_1}\" \"${tmp1}\" -json_import \"${RPE_B0_1_JSON}\" -quiet -force
-          mrconvert \"${RPE_B0_2}\" \"${tmp2}\" -json_import \"${RPE_B0_2_JSON}\" -quiet -force
-          mrcat \"${tmp1}\" \"${tmp2}\" -axis 3 \"${RPE_MIF}\" -quiet -force
-          rm -f \"${tmp1}\" \"${tmp2}\"
-        "
-    fi
-  fi
-
-  ### find primary DTI scan ###
   for nii in ${DWI_PFX}*.nii.gz; do
     base="${nii%.nii.gz}"
     bval="${base}.bval"
@@ -158,71 +123,57 @@ detect_dti_files() {
     json="${base}.json"
 
     if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
-      PRIMARY_DTI_NII="${nii}"
-      PRIMARY_DTI_BVAL="${bval}"
-      PRIMARY_DTI_BVEC="${bvec}"
-      PRIMARY_DTI_JSON="${json}"
-      break  # assume only one
+      if [[ -z "${PRIMARY_DTI_NII}" ]]; then
+        PRIMARY_DTI_NII="${nii}"
+        PRIMARY_DTI_BVAL="${bval}"
+        PRIMARY_DTI_BVEC="${bvec}"
+        PRIMARY_DTI_JSON="${json}"
+      else
+        RPE_DWI_NII="${nii}"
+        RPE_JSON="${json}"
+        RPE_BVAL="${bval}"
+        RPE_BVEC="${bvec}"
+      fi
+    elif [[ -f "${nii}" && -f "${json}" && ! -f "${bval}" && ! -f "${bvec}" ]]; then
+      RPE_B0_NII="${nii}"
+      RPE_JSON="${json}"
     fi
   done
 
-  local primary_pe=$(jq -r '.PhaseEncodingDirection' "${PRIMARY_DTI_JSON}")
+  if [[ -n "${PRIMARY_DTI_JSON}" && -n "${RPE_JSON}" ]]; then
+    pe_primary=$(jq -r '.PhaseEncodingDirection' "${PRIMARY_DTI_JSON}")
+    pe_rpe=$(jq -r '.PhaseEncodingDirection' "${RPE_JSON}")
 
-  ### if no rpe.mif, look for second full DTI scan with opposite PE ###
-  if [[ -z "${RPE_MIF}" ]]; then
-    for nii in ${DWI_PFX}*.nii.gz; do
-      [[ "$nii" == "${PRIMARY_DTI_NII}" ]] && continue
-      base="${nii%.nii.gz}"
-      bval="${base}.bval"
-      bvec="${base}.bvec"
-      json="${base}.json"
+    if [[ "${pe_primary}" == "j" && "${pe_rpe}" == "j-" ]]; then
+      tmp="${PRIMARY_DTI_NII}"
+      PRIMARY_DTI_NII="${RPE_DWI_NII}"
+      RPE_DWI_NII="${tmp}"
 
-      if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
-        pe=$(jq -r '.PhaseEncodingDirection' "${json}")
-        if [[ "${pe}" != "${primary_pe}" ]]; then
-          log "Found second DTI scan with opposing PE, generating rpe.mif"
-          RPE_MIF="${IN_DIR}/${SUB_ID}/${DWI_PFX}_detected_rpe.mif"
-          mrconvert "${nii}" "${RPE_MIF}" -json_import "${json}" -quiet -force
-          break
-        fi
-      fi
-    done
+      tmp="${PRIMARY_DTI_BVAL}"
+      PRIMARY_DTI_BVAL="${RPE_DWI_NII%.nii.gz}.bval"
+      tmp="${PRIMARY_DTI_BVEC}"
+      PRIMARY_DTI_BVEC="${RPE_DWI_NII%.nii.gz}.bvec"
+      tmp="${PRIMARY_DTI_JSON}"
+      PRIMARY_DTI_JSON="${RPE_JSON}"
+      RPE_JSON="${tmp}"
+    fi
   fi
-
-  ### if still no rpe.mif, look for standalone B0 volume with json and opposite PE ###
-  if [[ -z "${RPE_MIF}" ]]; then
-    for nii in *.nii.gz; do
-      [[ "$nii" == "${PRIMARY_DTI_NII}" ]] && continue
-      base="${nii%.nii.gz}"
-      bval="${base}.bval"
-      bvec="${base}.bvec"
-      json="${base}.json"
-
-      if [[ -f "${json}" && ! -f "${bval}" && ! -f "${bvec}" ]]; then
-        pe=$(jq -r '.PhaseEncodingDirection' "${json}")
-        if [[ "${pe}" != "${primary_pe}" ]]; then
-          log "Found single-volume B0 with opposing PE, generating rpe.mif"
-          RPE_DWI_NII=${IN_DIR}/${SUB_ID}/"${nii}"
-          RPE_MIF="${IN_DIR}/${SUB_ID}/${DWI_PFX}_detected_rpe.mif"
-          mrconvert "${nii}" "${RPE_MIF}" -json_import "${json}" -quiet -force
-          break
-        fi
-      fi
-    done
-  fi
-
-  ### finalize full paths (if variables are not empty) ###
-  for var in PRIMARY_DTI_NII PRIMARY_DTI_BVAL PRIMARY_DTI_BVEC PRIMARY_DTI_JSON \
-             RPE_B0_1 RPE_B0_2 RPE_B0_1_JSON RPE_B0_2_JSON; do
-    val="${!var}"
-    echo $val
-    [[ -n "$val" ]] && eval "$var=\"${IN_DIR}/${SUB_ID}/$val\""
-  done
-
-  ### log whether RPE data was found ###
-  [[ -n "${RPE_MIF}" ]] && log "RPE data: ${RPE_MIF}" || log "No RPE data found"
-
   popd > /dev/null
+
+  if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
+        -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
+    log "ERROR: Required primary DTI files not found in ${IN_DIR}/${SUB_ID}"
+    log $(ls -1 "${IN_DIR}/${SUB_ID}")
+    exit 1
+  fi
+
+  PRIMARY_DTI_NII="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_NII}"
+  PRIMARY_DTI_BVAL="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_BVAL}"
+  PRIMARY_DTI_BVEC="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_BVEC}"
+  PRIMARY_DTI_JSON="${IN_DIR}/${SUB_ID}/${PRIMARY_DTI_JSON}"
+  [[ -n "${RPE_B0_NII}" ]] && RPE_B0_NII="${IN_DIR}/${SUB_ID}/${RPE_B0_NII}"
+  [[ -n "${RPE_DWI_NII}" ]] && RPE_DWI_NII="${IN_DIR}/${SUB_ID}/${RPE_DWI_NII}"
+  [[ -n "${RPE_JSON}" ]] && RPE_JSON="${IN_DIR}/${SUB_ID}/${RPE_JSON}"
 }
 
 verify_minimum_required_inputs()
@@ -231,15 +182,11 @@ verify_minimum_required_inputs()
   log "PRIMARY_DTI_BVAL: $(basename "${PRIMARY_DTI_BVAL:-}")"
   log "PRIMARY_DTI_BVEC: $(basename "${PRIMARY_DTI_BVEC:-}")"
   log "PRIMARY_DTI_JSON: $(basename "${PRIMARY_DTI_JSON:-}")"
+  log "RPE_B0_NII     : $(basename "${RPE_B0_NII:-}")"
   log "RPE_DWI_NII    : $(basename "${RPE_DWI_NII:-}")"
+  log "RPE_JSON       : $(basename "${RPE_JSON:-}")"
   log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
   log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
-  log "RPE_JSON      : $(basename "${RPE_JSON:-}")"
-  log "RPE_B0_1      : $(basename "${RPE_B0_1:-}")"
-  log "RPE_B0_2      : $(basename "${RPE_B0_2:-}")"
-  log "RPE_B0_1_JSON  : $(basename "${RPE_B0_1_JSON:-}")"
-  log "RPE_B0_2_JSON  : $(basename "${RPE_B0_2_JSON:-}")"
-  log "RPE_MIF       : $(basename "${RPE_MIF:-}")"
 
   if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
         -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
@@ -375,6 +322,21 @@ pipe_mrconvert()
       -fslgrad ${PRIMARY_DTI_BVEC} ${PRIMARY_DTI_BVAL} \
       -json_import ${PRIMARY_DTI_JSON} \
       -nthreads "${THREADS}"
+
+  if [[ ! -z "${RPE_B0_NII}" ]]; then
+    run_if_missing "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
+      mrconvert "${RPE_B0_NII}" "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
+        -json_import "${RPE_JSON}" \
+        -nthreads "${THREADS}"
+  fi
+
+  if [[ ! -z "${RPE_DWI_NII}" ]]; then
+    run_if_missing "${OUT_BASE_DIR}/rpe_dwi.mif" \
+      mrconvert ${RPE_DTI_NII} "${OUT_BASE_DIR}/rpe_dwi.mif" \
+        -fslgrad ${RPE_BVEC} ${RPE_BVAL} \
+        -json_import ${RPE_JSON} \
+        -nthreads "${THREADS}"
+  fi
 }
 
 run_quantatitive_eddy_qc()
@@ -437,37 +399,30 @@ pipe_dwi_preprocessing()
 pipe_rpe_preprocessing()
 {
   ### preprocess rpe_b0, if available (scenario 2) ###
-  if [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" ]]; then
+  if [[ -n "${RPE_B0_NII}" ]]; then
     log "preprocessing RPE B0"
     log "denoising set to null operation"
-    run_degibbs ${RPE_MIF} \
+    run_degibbs "${OUT_BASE_DIR}/rpe_b0_dwi.mif" \
       "${OUT_BASE_DIR}/rpe_denoised_degibbs.mif"
-
-    run_qc_residual ${RPE_MIF} \
-      ${OUT_BASE_DIR}/rpe_denoised_degibbs.mif \
-      ${OUT_BASE_DIR}/rpe_denoised_degibbs_residuals.mif \
-      ${SUB_ID}_rpe_denoised_degibbs_residuals
   fi
 
   ### preprocess rpe_dwi, if available (scenario 3) ###
-  #if [[ -n "${RPE_DWI_NII}" ]]; then
-  #  log "preprocessing RPE DWI"
-  #
-  #  run_dwidenoise "${OUT_BASE_DIR}/rpe_dwi.mif" \
-  #    "${OUT_BASE_DIR}/rpe_dwi_denoised.mif"
-  #  
-  #  run_degibbs "${OUT_BASE_DIR}/rpe_dwi_denoised.mif" \
-  #    "${OUT_BASE_DIR}/rpe_dwi_denoised_degibbs.mif"
+  if [[ -n "${RPE_DWI_NII}" ]]; then
+    log "preprocessing RPE DWI"
+
+    run_dwidenoise "${OUT_BASE_DIR}/rpe_dwi.mif" \
+      "${OUT_BASE_DIR}/rpe_dwi_denoised.mif"
+    
+    run_degibbs "${OUT_BASE_DIR}/rpe_dwi_denoised.mif" \
+      "${OUT_BASE_DIR}/rpe_dwi_denoised_degibbs.mif"
+  fi
 
   ### qc residuals ###
-  # run_qc_residual ${OUT_BASE_DIR}/rpe_b0_dwi.mif \
-  #   ${OUT_BASE_DIR}/rpe_denoised_degibbs.mif \
-  #   ${OUT_BASE_DIR}/rpe_denoised_degibbs_residuals.mif \
-  #   ${SUB_ID}_rpe_denoised_degibbs_residuals
+  run_qc_residual ${OUT_BASE_DIR}/rpe_b0_dwi.mif \
+    ${OUT_BASE_DIR}/rpe_denoised_degibbs.mif \
+    ${OUT_BASE_DIR}/rpe_denoised_degibbs_residuals.mif \
+    ${SUB_ID}_rpe_denoised_degibbs_residuals
 
-  #fi
-
-  
 }
 
 pipe_dwipreproc()
@@ -648,7 +603,7 @@ pipe_alps_extract()
   local tensor_projected="${OUT_BASE_DIR}/tbss/FA/dwi_to_target_tensor.nii.gz"
   local alps_dir="${OUT_BASE_DIR}/alps"
   local tensor_dir="${alps_dir}/tensor"
-  local output_csv="${alps_dir}/alps_metrics.csv"
+  local output_csv="${alps_dir}/${SUB_ID}_alps_metrics.csv"
 
   mkdir -p "${tensor_dir}"
 
@@ -680,7 +635,7 @@ pipe_alps_extract()
   {
     echo "Subject,L_Dxproj,L_Dxassoc,L_Dyproj,L_Dzassoc,R_Dxproj,R_Dxassoc,R_Dyproj,R_Dzassoc"
     echo "${SUB_ID},${L_Dxproj},${L_Dxassoc},${L_Dyproj},${L_Dzassoc},${R_Dxproj},${R_Dxassoc},${R_Dyproj},${R_Dzassoc}"
-  } > "${alps_dir}/alps_tensor_components.csv"  
+  } > "${alps_dir}/${SUB_ID}_alps_tensor_components.csv"  
   
   # Write to CSV ALPS indices
   {

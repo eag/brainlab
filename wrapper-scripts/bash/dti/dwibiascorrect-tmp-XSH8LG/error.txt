@@ -1,0 +1,5 @@
+mrconvert /home/egibson/tmp/test_datasets_dti/derivatives/dti/sub-OND01BYC1006-sess-BL/dwi_denoised_degibbs_eddy.mif /home/egibson/work/code/brainlab/wrapper-scripts/bash/dti/dwibiascorrect-tmp-XSH8LG/in.mif
+
+mrconvert: [ERROR] failed to open key/value file "/home/egibson/tmp/test_datasets_dti/derivatives/dti/sub-OND01BYC1006-sess-BL/dwi_denoised_degibbs_eddy.mif": No such file or directory
+mrconvert: [ERROR] error opening image "/home/egibson/tmp/test_datasets_dti/derivatives/dti/sub-OND01BYC1006-sess-BL/dwi_denoised_degibbs_eddy.mif"
+

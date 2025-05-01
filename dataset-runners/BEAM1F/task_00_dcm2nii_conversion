@@ -1,0 +1,14 @@
+#!/bin/bash
+
+IN_DIR=/net/synapse/nt/data/BEAM1F/MRI/raw
+SUB_ID_SEARCH_STRING="*BYC*[0-9]"
+OUT_DIR=/net/synapse/nt/users/egibson/tmp/BEM01F
+
+
+
+sub_dirs=$(ls -d ${IN_DIR}/${SUB_ID_SEARCH_STRING})
+for sub_dir in ${sub_dirs}; do
+  sub_id=$(basename ${sub_dir})
+  mkdir -p ${OUT_DIR}/${sub_id}
+  dcm2niix -o ${OUT_DIR}/${sub_id} -z y ${sub_dir}
+done
