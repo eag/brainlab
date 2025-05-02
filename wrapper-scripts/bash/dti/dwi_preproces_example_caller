@@ -7,9 +7,12 @@ dry_run=0
 regrid_size="1,1,1" 
 
 # BEAM TEST
-sub_ids="BEM01_BYC_5002"
-dwi_pfx="dwi"
-dry_run=1
+sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
+sub_ids="sub-OND01BYC1006_ses-BL"
+sub_ids="C6-01-024_180713"
+sub_ids="sub-BCSA1F009_ses-FU"
+dwi_pfx="*"
+dry_run=0
 cleanup=0
 
 

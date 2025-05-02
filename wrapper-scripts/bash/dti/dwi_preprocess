@@ -218,7 +218,7 @@ check_exit()
   local msg=$2
   if [[ $status -ne 0 ]]; then
     log "ERROR: $msg"
-    pipe_cleanup
+    run_cleanup_scratch
     exit $status
   fi
 }
@@ -602,7 +602,7 @@ pipe_dwipreproc()
 {
   local input=${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
   local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
-  local scratch_dir=${SCRATCH_DIR}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)
+  local scratch_dir=${SCRATCH_DIR_OUT}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)
 
   ### run dwifslpreproc by scenario ###
   if [[ -f "${RPE_MIF}" && -n "${RPE_BVEC}" ]]; then
@@ -681,7 +681,7 @@ pipe_bias_correct()
     dwibiascorrect ants "${input}" "${output}" \
     -mask "${mask}" \
     -nthreads "${THREADS}" \
-    -scratch "${SCRATCH_DIR}" 
+    -scratch "${SCRATCH_DIR_OUT}" 
   check_exit $? "dwibiascorrect failed for ${input}"
 }
 
@@ -758,13 +758,17 @@ pipe_generate_additional_dti_maps()
 
   ### axial diffusivity (AD = L1) ###
   
-  # Radial diffusivity (RD = (L2 + L3)/2)
+  ### Radial diffusivity (RD = (L2 + L3)/2) ###
   run_if_missing ${tensor_dir}/dwi_RD.nii.gz \
     fslmaths "${L2}" -add "${L3}" -div 2 "${tensor_dir}/dwi_RD.nii.gz"
 
-  # Free water estimate (FW = S0 - MD) clipped at 0
+  ### Free water estimate (FW = S0 - MD) clipped at 0 ###
   run_if_missing ${tensor_dir}/dwi_FW_estimate.nii.gz \
     fslmaths "${S0}" -sub "${MD}" -thr 0 "${tensor_dir}/dwi_FW_estimate.nii.gz"
+
+  ### generate png of free water maps and save to QC_DIR ###
+  run_screen_grab_image ${tensor_dir}/dwi_FW_estimate.nii.gz \
+    ${SUB_ID}_dwi_FW_estimate_${REGRID_SIZE_FORMATTED}
 }
 
 pipe_tbss()
@@ -886,33 +890,81 @@ pipe_alps_extract()
   fi
 }
 
-pipe_cleanup()
+#-------------------------------------------------------------------------------
+### CLEANUP FUNCTIONS ###
+#-------------------------------------------------------------------------------
+
+run_cleanup_scratch()
 {
-  ### always remove SCRATCH_DIR_OUT, but do so super safely ###
-  if [[ -d "${SCRATCH_DIR_OUT}" ]]; then
-    ### ensure SCRATCH_DIR_OUT is not empty, not root, and starts with SCRATCH_DIR ###
-    if [[ -n "${SCRATCH_DIR}" && "${SCRATCH_DIR_OUT}" == "${SCRATCH_DIR}"/* && -d "${SCRATCH_DIR_OUT}" ]]; then
-      if [[ "${DRY_RUN}" -eq 1 ]]; then
-        log "DRY_RUN: would delete scratch directory: ${SCRATCH_DIR_OUT}"
-      else
-        log "Deleting scratch directory: ${SCRATCH_DIR_OUT}"
-        rm -rf "${SCRATCH_DIR_OUT}"
-      fi
-    else
-      log "WARNING: Unsafe scratch directory path, skipping deletion: ${SCRATCH_DIR_OUT}"
-    fi
+  ### delete SCRATCH_DIR_OUT super safely ###  
+  local parent=$(realpath "${SCRATCH_DIR}" 2>/dev/null)
+  local child=$(realpath "${SCRATCH_DIR_OUT}" 2>/dev/null)
+  local safe_to_delete=0
+
+  if [[ -z "$parent" || -z "$child" ]]; then
+    log "ERROR: Could not resolve SCRATCH_DIR or SCRATCH_DIR_OUT with realpath"
+    return
+  fi
+  
+  if [[ "$parent" == "/" || "$child" == "/" ]]; then
+    log "ERROR: Unsafe path detected — one of the paths resolves to root (/)"
+  fi
+  
+  if [[ ! -d "$child" && ${DRY_RUN} -eq 0 ]]; then
+    log "Scratch directory does not exist: $child"
+  fi
+  
+  if [[ "$child" == "$parent"/* ]]; then
+    safe_to_delete=1
+  else
+    log "WARNING: ${child} is not a subdirectory of ${parent}, skipping deletion"
   fi
 
-  if [[ ${CLEANUP} -eq 1 ]]; then
-    if [[ "${DRY_RUN}" -eq 1 ]]; then
-      log "DRY_RUN: would perform additional cleanup (not implemented)"
+  ### log SCRATCH_DIR_OUT deletion for DRY_RUN and exit ###
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    if [[ ${safe_to_delete} -eq 1 ]]; then
+      log "DRY_RUN: would delete scratch directory: ${child}"
     else
-      log "Cleaning up temporary files"
-      log "TODO: implement additional cleanup if needed"
+      log "DRY_RUN: would skip deletion of scratch directory: ${child}"
     fi
+    return
   fi
+
+  ### delete SCRATCH_DIR_OUT ###
+  if [[ ${safe_to_delete} -eq 1 ]]; then
+    log "Deleting scratch directory: ${child}"
+    rm -rf "${child}"
+  else
+    log "WARNING: Unsafe to delete scratch directory: ${child}"
+  fi
+
+  pushd "${BASE_OUT_DIR}" > /dev/null
 }
 
+pipe_cleanup()
+{
+  pushd "${OUT_BASE_DIR}" > /dev/null
+
+  log "Cleaning up temporary files"
+
+  ### delete MIF intermediates ###
+  rm -f dwi.mif 
+
+  ### delete tensor conversion intermediates ###
+  #rm -f 1_1_1_tensor_fit/dwi.b* 1_1_1_tensor_fit/dwi_grad_table 1_1_1_tensor_fit/dwi.nii.gz 1_1_1_tensor_fit/dwi_mask.nii.gz
+
+  ### delete TBSS intermediates ###
+  #rm -rf 1_1_1_tbss/FA/tbss_logs 1_1_1_tbss/FA/slicesdir
+  #rm -f 1_1_1_tbss/FA/dwi_FA_to_target* 1_1_1_tbss/FA/target.nii.gz 1_1_1_tbss/tensor/dwi.nii.gz
+
+  ### delete ALPS tensor.nii.gz ###
+  #rm -f 1_1_1_alps/tensor/tensor.nii.gz
+
+  ### delete extra Eddy QC files ###
+  #rm -f eddyqc_dir/eddy_outlier_* eddyqc_dir/eddy_post_eddy_* eddyqc_dir/ref.txt eddyqc_dir/ref_list.png
+
+  popd > /dev/null
+}
 
 #-------------------------------------------------------------------------------
 ### MAIN ###
@@ -928,19 +980,17 @@ main()
   log "----------------------------------------"
   log "DWI pipeline STARTED for ${SUB_ID}: time $(date '+%F %T')"
 
-
-  ### if no primary DWI is set, try to detect it ###
-  if [[ -z "${PRIMARY_DWI_NII}" ]]; then
-    log "Auto-detecting DWI files..."
-    detect_dti_files
-  fi
-
+  ### try to detect DTI files ###
+  log "Auto-detecting DWI files..."
+  detect_dti_files
+  
   ### prep for preprocessing ###
   verify_minimum_required_inputs
 
   ### halt if DRY_RUN is set ###
   if [[ ${DRY_RUN} -eq 1 ]]; then
     log "DRY_RUN is set to 1, skipping pipeline execution"
+    run_cleanup_scratch
     return
   fi
 
@@ -987,3 +1037,4 @@ main()
 main "$@"
 
 #-------------------------------------------------------------------------------
+

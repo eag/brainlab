@@ -1,0 +1,15 @@
+
+IN_DIR=/net/synapse/nt/data/AGPA1F/MRI/raw/C6-01-024/C6-01-024_180713/1.2.840.113619.6.374.222737905798918863468255732080152554992
+SUB_ID_SEARCH_STRING="*"
+OUT_DIR=/net/synapse/nt/users/egibson/tmp/AGPA1F
+
+
+sub_dirs=$(ls -d ${IN_DIR}/${SUB_ID_SEARCH_STRING})
+for sub_dir in ${sub_dirs}; do
+  echo ${sub_dir}
+  ls ${sub_dir}
+  
+  sub_id=$(basename ${sub_dir})
+  mkdir -p ${OUT_DIR}/${sub_id}
+  dcm2niix -o ${OUT_DIR}/${sub_id} -z y ${sub_dir}
+done
