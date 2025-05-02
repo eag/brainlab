@@ -1,21 +1,30 @@
 #!/bin/bash
-
-### NOTES ###
-# - this script performs standard DTI preprocessing steps suitable for clinical data
-# - EPI distortion correction is performed only if RPE data was acquired
-# - expects input as the subject folder containing DTI data from DICOM conversion
-#   - i.e. output from dcm2niix or equivalent (nii.gz, .bval, .bvec, and .json files)
-# - the input folder must contain either:
-#     1. a single DTI acquisition, or
-#     2. a DTI acquisition uniquely identified by the prefix <dwi_pfx*>
-# - does not explicitly verify that the input data is a DTI scan, otherwise will simply attempt 
-#   to process and fail
-# - processing steps determined primarily from image and json sidecar data found in
-#   the input folder and specifics are written to the log file
-
-# TODO: 
-# - currently assumes "b0_1.nii.gz" and "b0_2.nii.gz" suffix for dual b0 acquisitions
-# - dual full DTI acquisitions not yet tested/implemented
+# ------------------------------------------------------------------------------
+# @file dwi_preprocess.sh
+#
+# This script performs standard DTI preprocessing steps suitable for clinical data.
+# EPI distortion correction is performed only if RPE data was acquired.
+# Expects input as the subject folder containing DTI data from DICOM conversion,
+# i.e., output from dcm2niix or equivalent (nii.gz, .bval, .bvec, and .json files).
+#
+# The input folder must contain either:
+#   1. A single DTI acquisition, or
+#   2. A DTI acquisition uniquely identified by the prefix <dwi_pfx*> 
+#      (i.e., ls <input_folder>/<dwi_pfx>* returns only that acquisition).
+#
+# Note:
+# - Does not explicitly verify that the input data is a DTI scan. If not, the script
+#   will simply attempt to process as DTI data and fail.
+# - Processing steps are determined primarily from image and JSON sidecar data found
+#   in the input folder, with the specific processing commands written to the log file.
+#
+# @author Erin Gibson
+# @date 2025-05-02
+#
+# TODO:
+# - Currently assumes "b0_1.nii.gz" and "b0_2.nii.gz" suffix for dual b0 acquisitions.
+# - Dual full DTI acquisitions not yet tested/implemented.
+# ------------------------------------------------------------------------------
 
 #===============================================================================
 ### PARSE ARGUMENTS AND SET GLOBAL VARIABLES ###
@@ -72,10 +81,10 @@ parse_arguments()
 ### GLOBAL VARIABLES (auto-filled later) ###
 #-------------------------------------------------------------------------------
 
-PRIMARY_DTI_NII=""
-PRIMARY_DTI_BVAL=""
-PRIMARY_DTI_BVEC=""
-PRIMARY_DTI_JSON=""
+PRIMARY_DWI_NII=""
+PRIMARY_DWI_BVAL=""
+PRIMARY_DWI_BVEC=""
+PRIMARY_DWI_JSON=""
 RPE_DWI_NII=""
 RPE_BVAL=""
 RPE_BVEC=""
@@ -112,7 +121,7 @@ setup_environment()
 
 setup_directories()
 {
-  ### DRY_RUN existence of required input directories ###
+  ### check existence of required input directories ###
   declare -A REQUIRED_DIRS=(
     ["Input directory"]="${IN_DIR}/${SUB_ID}"
     ["Scratch directory"]="${SCRATCH_DIR}"
@@ -136,7 +145,7 @@ setup_directories()
     }
   done
 
-  ### DRY_RUN writability of output directories ###
+  ### check writability of output directories ###
   declare -A WRITABLE_DIRS=(
     ["Scratch directory"]="${SCRATCH_DIR}"
     ["Output base directory"]="${OUT_BASE_DIR}"
@@ -201,11 +210,11 @@ check_exit()
 detect_dti_files() {
   pushd "${IN_DIR}/${SUB_ID}" > /dev/null
 
-  ### exit if more than two full DTI acquisitions are found ###
+  ### exit if more than two full DWI acquisitions are found ###
   dti_files=(${DWI_PFX}*.bvec)
   if (( ${#dti_files[@]} > 2 )); then
-    log "ERROR: More than two DTI .nii.gz files found — unknown scenario"
-    log "Please DRY_RUN input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*.nii.gz"
+    log "ERROR: More than two DWI .nii.gz files found — unknown scenario"
+    log "Please check input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*.nii.gz"
     exit 1
   fi
 
@@ -243,25 +252,25 @@ detect_dti_files() {
         log "Please add first, inferring from PhaseEncodingAxis + ImageOrientationPatientDICOM"
         exit 1
       fi
-      PRIMARY_DTI_NII="${nii}"
-      PRIMARY_DTI_BVAL="${bval}"
-      PRIMARY_DTI_BVEC="${bvec}"
-      PRIMARY_DTI_JSON="${json}"
-      break  # stop searching after finding the first DTI scan
+      PRIMARY_DWI_NII="${nii}"
+      PRIMARY_DWI_BVAL="${bval}"
+      PRIMARY_DWI_BVEC="${bvec}"
+      PRIMARY_DWI_JSON="${json}"
+      break  # stop searching after finding the first DWI scan
     fi
   done
 
-  ### if no rpe.mif (from b0_1/b0_2), look for second full DTI scan ###
+  ### if no rpe.mif (from b0_1/b0_2), look for second full DWI scan ###
   # TODO: implement
   if [[ -z "${RPE_MIF}" ]]; then
     for nii in ${DWI_PFX}*.nii.gz; do
-      [[ "$nii" == "${PRIMARY_DTI_NII}" ]] && continue
+      [[ "$nii" == "${PRIMARY_DWI_NII}" ]] && continue
       base="${nii%.nii.gz}"
       bval="${base}.bval"
       bvec="${base}.bvec"
       json="${base}.json"
       if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
-        log "Found second DTI scan: ERROR -- not yet implemented"
+        log "Found second DWI scan: ERROR -- not yet implemented"
         exit 1
       fi
     done
@@ -270,7 +279,7 @@ detect_dti_files() {
   ### if still no rpe.mif, look for single RPE volume with json only ###
   if [[ -z "${RPE_MIF}" ]]; then
     for nii in *.nii.gz; do
-      [[ "$nii" == "${PRIMARY_DTI_NII}" ]] && continue
+      [[ "$nii" == "${PRIMARY_DWI_NII}" ]] && continue
       base="${nii%.nii.gz}"
       bval="${base}.bval"
       bvec="${base}.bvec"
@@ -286,7 +295,7 @@ detect_dti_files() {
   fi
 
   ### finalize full paths for the non-empty variables ###
-  for var in PRIMARY_DTI_NII PRIMARY_DTI_BVAL PRIMARY_DTI_BVEC PRIMARY_DTI_JSON \
+  for var in PRIMARY_DWI_NII PRIMARY_DWI_BVAL PRIMARY_DWI_BVEC PRIMARY_DWI_JSON \
              RPE_B0_1 RPE_B0_2 RPE_B0_1_JSON RPE_B0_2_JSON; do
     val="${!var}"
     [[ -n "$val" ]] && eval "$var=\"${IN_DIR}/${SUB_ID}/$val\""
@@ -300,10 +309,10 @@ detect_dti_files() {
 
 verify_minimum_required_inputs()
 {
-  log "PRIMARY_DTI_NII : $(basename "${PRIMARY_DTI_NII:-}")"
-  log "PRIMARY_DTI_BVAL: $(basename "${PRIMARY_DTI_BVAL:-}")"
-  log "PRIMARY_DTI_BVEC: $(basename "${PRIMARY_DTI_BVEC:-}")"
-  log "PRIMARY_DTI_JSON: $(basename "${PRIMARY_DTI_JSON:-}")"
+  log "PRIMARY_DWI_NII : $(basename "${PRIMARY_DWI_NII:-}")"
+  log "PRIMARY_DWI_BVAL: $(basename "${PRIMARY_DWI_BVAL:-}")"
+  log "PRIMARY_DWI_BVEC: $(basename "${PRIMARY_DWI_BVEC:-}")"
+  log "PRIMARY_DWI_JSON: $(basename "${PRIMARY_DWI_JSON:-}")"
   log "RPE_DWI_NII    : $(basename "${RPE_DWI_NII:-}")"
   log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
   log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
@@ -314,10 +323,10 @@ verify_minimum_required_inputs()
   log "RPE_B0_2_JSON  : $(basename "${RPE_B0_2_JSON:-}")"
   log "RPE_MIF       : $(basename "${RPE_MIF:-}")"
 
-  if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
-        -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
+  if [[ -z "${PRIMARY_DWI_NII}" || -z "${PRIMARY_DWI_BVAL}" || \
+        -z "${PRIMARY_DWI_BVEC}" || -z "${PRIMARY_DWI_JSON}" ]]; then
     log "ERROR: required input [nii.gz + json + bvec + bval] not found"
-    log "Please DRY_RUN input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*"
+    log "Please check input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*"
     exit 1
   fi
 }
@@ -414,7 +423,6 @@ run_create_combined_rpe() {
   rm -f "${tmp1}" "${tmp2}"
 }
 
-
 run_dwidenoise() 
 {
   local input="$1"
@@ -428,7 +436,7 @@ run_degibbs()
 {
   local input="$1"
   local output="$2"
-  detect_slice_orientation_from_json "${PRIMARY_DTI_JSON}"
+  detect_slice_orientation_from_json "${PRIMARY_DWI_JSON}"
   
   if [[ -z "${SLICE_OR}" ]]; then
     log "Slice orientation not detected, using default (0,1)"
@@ -488,11 +496,11 @@ run_qc_residual()
 pipe_mrconvert()
 {
   run_if_missing "${OUT_BASE_DIR}/dwi.mif" \
-    mrconvert ${PRIMARY_DTI_NII} "${OUT_BASE_DIR}/dwi.mif" \
-      -fslgrad ${PRIMARY_DTI_BVEC} ${PRIMARY_DTI_BVAL} \
-      -json_import ${PRIMARY_DTI_JSON} \
+    mrconvert ${PRIMARY_DWI_NII} "${OUT_BASE_DIR}/dwi.mif" \
+      -fslgrad ${PRIMARY_DWI_BVEC} ${PRIMARY_DWI_BVAL} \
+      -json_import ${PRIMARY_DWI_JSON} \
       -nthreads "${THREADS}"
-   check_exit $? "mrconvert failed for ${PRIMARY_DTI_NII}"
+   check_exit $? "mrconvert failed for ${PRIMARY_DWI_NII}"
 }
 
 run_quantatitive_eddy_qc()
@@ -686,7 +694,7 @@ pipe_tensor_fit()
   
   mkdir -p "${output_dir}"
 
-  ### convert to nifti for dti fit ###
+  ### convert to nifti for dtifit ###
   local dwi_nii="${output_dir}/dwi.nii.gz"
   local bvec="${output_dir}/dwi.bvecs"
   local bval="${output_dir}/dwi.bvals"
@@ -845,12 +853,12 @@ main()
   setup_directories  
   local start_time=$(date +%s)
   log "----------------------------------------"
-  log "DTI pipeline STARTED for ${SUB_ID}: time $(date '+%F %T')"
+  log "DWI pipeline STARTED for ${SUB_ID}: time $(date '+%F %T')"
 
 
-  ### if no primary DTI is set, try to detect it ###
-  if [[ -z "${PRIMARY_DTI_NII}" ]]; then
-    log "Primary DTI not set: auto-detecting..."
+  ### if no primary DWI is set, try to detect it ###
+  if [[ -z "${PRIMARY_DWI_NII}" ]]; then
+    log "Primary DWI not set: auto-detecting..."
     detect_dti_files
   fi
 
@@ -894,7 +902,7 @@ main()
   local elapsed_seconds=$((end_time - start_time))
   local elapsed_minutes=$((elapsed_seconds / 60))
   local remaining_seconds=$((elapsed_seconds % 60))
-  log "DTI pipeline COMPLETED for ${SUB_ID}: time $(date '+%F %T')"
+  log "DWI pipeline COMPLETED for ${SUB_ID}: time $(date '+%F %T')"
   log "TOTAL PROCESSING TIME: ${elapsed_minutes} minutes ${remaining_seconds} seconds"
 }
 
