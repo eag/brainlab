@@ -1,30 +1,16 @@
-in_dir="${HOME}/tmp/test_datasets_dti/organized"
-out_dir="${HOME}/tmp/test_datasets_dti/derivatives/dti"
+in_dir="${HOME}/tmp/dti_test_datasets/organized"
+out_dir="${HOME}/tmp/dti_test_datasets/derivatives/dti"
 scratch_dir="${HOME}/tmp/"
-alps_roi_dir="${HOME}/tmp/test_datasets_dti/alps-rois"
+alps_roi_dir="${HOME}/tmp/alps-rois"
 threads=3
 dry_run=0
 regrid_size="1,1,1" 
 
-# no PE in sidecar
-sub_ids="002_S_0413"
-dwi_pfx="*"
-dry_run=0
-
 # BEAM TEST
-#sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
-#dwi_pfx="dwi"
-#dry_run=0
-
-# LEDUCQ TEST
-sub_ids="BCSA1F001"
-dwi_pfx="*"
-dry_run=0
-
-# ONDRI TEST
-#sub_ids="sub-OND01BYC1006-sess-BL sub-OND01BYC1009_ses-BL"
-#dwi_pfx="*"
-#dry_run=0
+sub_ids="BEM01_BYC_5002"
+dwi_pfx="dwi"
+dry_run=1
+cleanup=0
 
 
 
@@ -39,7 +25,8 @@ for sub_id in ${sub_ids}; do
     --dry_run "${dry_run}" \
     --sub_id "${sub_id}" \
     --dwi_pfx "${dwi_pfx}" \
-    --regrid_size "${regrid_size}"
+    --regrid_size "${regrid_size}" \
+    --cleanup "${cleanup}" 
 
 
 done

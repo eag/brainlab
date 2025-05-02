@@ -12,6 +12,16 @@
 #   2. A DTI acquisition uniquely identified by the prefix <dwi_pfx*> 
 #      (i.e., ls <input_folder>/<dwi_pfx>* returns only that acquisition).
 #
+# The output folder for the SUB_ID will contain the following:
+#   - dwi_denoised_degibbs_eddy_N4.mif: preprocessed DWI data 
+#     denoised + Gibbs artifact corrected + <EPI distortion corrected> + bias field corrected DTI
+#   - dwi_denoised_degibbs_eddy_N4_<regrid_size>.mif: upsampled preprocessed DWI data
+#   - <regrid_size>_tensor_fit: directory containing tensor fit results
+#   - <regrid_size>_tbss: directory containing TBSS results
+#   - <regrid_size>_alps: directory containing ALPS results
+#   - ../qc: directory containing QC images
+#   - ../logs: directory containing log files
+#
 # Note:
 # - Does not explicitly verify that the input data is a DTI scan. If not, the script
 #   will simply attempt to process as DTI data and fail.
@@ -34,7 +44,7 @@ parse_arguments()
 {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --in_dir|--out_dir|--scratch_dir|--alps_roi_dir|--threads|--dry_run|--sub_id|--dwi_pfx|--regrid_size)
+      --in_dir|--out_dir|--scratch_dir|--alps_roi_dir|--threads|--dry_run|--sub_id|--dwi_pfx|--regrid_size|--cleanup)
         flag=$(echo "${1#--}" | tr '[:lower:]' '[:upper:]')  # e.g., in_dir -> IN_DIR
         value="$2"
         if [[ -z "$value" || "$value" == --* ]]; then
@@ -46,7 +56,7 @@ parse_arguments()
         ;;
       -h|--help)
         echo "Usage: $0 --in_dir DIR --out_dir DIR --scratch_dir DIR --alps_roi_dir DIR"
-        echo "          --threads N --dry_run 0|1 --sub_id ID --dwi_pfx PFX --regrid_size X,Y,Z"
+        echo "          --threads N --dry_run 0|1 --sub_id ID --dwi_pfx PFX --regrid_size X,Y,Z --cleanup 0|1"
         echo -e "Notes\n  PFX=\"*\" for folders containing a single DTI acquisition"
         exit 0
         ;;
@@ -59,8 +69,7 @@ parse_arguments()
 
   ### confirm all required global variables are set ###
   required_vars=(
-    IN_DIR OUT_DIR SCRATCH_DIR ALPS_ROI_DIR
-    THREADS DRY_RUN SUB_ID DWI_PFX REGRID_SIZE
+    IN_DIR OUT_DIR SCRATCH_DIR ALPS_ROI_DIR THREADS DRY_RUN SUB_ID DWI_PFX REGRID_SIZE CLEANUP
   )
   for var in "${required_vars[@]}"; do
     if [[ -z "${!var}" ]]; then
@@ -75,6 +84,7 @@ parse_arguments()
   LOG_DIR="${OUT_DIR}/logs"
   LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
   REGRID_SIZE_FORMATTED=$(echo "${REGRID_SIZE}" | sed 's/,/_/g')
+  SCRATCH_DIR_OUT="${SCRATCH_DIR}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)"
 }
 
 #-------------------------------------------------------------------------------
@@ -158,6 +168,15 @@ setup_directories()
       exit 1
     fi
   done
+
+  ### create directory in scratch directory for dwibiascorrect ###
+  if [[ ${DRY_RUN} -eq 0 ]]; then
+    mkdir ${SCRATCH_DIR_OUT} || 
+    {
+      echo "ERROR: Failed to create scratch directory: ${SCRATCH_DIR_OUT}" >&2
+      exit 1
+    }
+  fi
 }
 
 run_if_missing() 
@@ -199,6 +218,7 @@ check_exit()
   local msg=$2
   if [[ $status -ne 0 ]]; then
     log "ERROR: $msg"
+    pipe_cleanup
     exit $status
   fi
 }
@@ -503,7 +523,7 @@ pipe_mrconvert()
    check_exit $? "mrconvert failed for ${PRIMARY_DWI_NII}"
 }
 
-run_quantatitive_eddy_qc()
+pipe_quantatitive_eddy_qc()
 {
   local eddy_dir="${OUT_BASE_DIR}/eddyqc_dir"
   local input_dwi="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif"
@@ -576,7 +596,6 @@ pipe_rpe_preprocessing()
   fi
 
   ### TODO: implement scenario 3 ###
-
 }
 
 pipe_dwipreproc()
@@ -642,7 +661,7 @@ pipe_dwipreproc()
 
   ### qc dwifslpreproc ###
   cp ${OUT_BASE_DIR}/eddyqc_dir/quad/qc.pdf ${QC_DIR}/${SUB_ID}_quad_eddy_qc.pdf
-  run_quantatitive_eddy_qc
+  pipe_quantatitive_eddy_qc
   run_screen_grab_image \
     ${output} \
     ${SUB_ID}_dwifslpreproc_qc \
@@ -688,7 +707,7 @@ pipe_upsample()
 pipe_tensor_fit()
 {
   local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}.mif 
-  local output_dir="${OUT_BASE_DIR}/tensor_fit_${REGRID_SIZE_FORMATTED}"
+  local output_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tensor_fit"
   local mask="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_mask.mif"
   local mask_regrid=${output_dir}/dwi_mask.nii.gz
   
@@ -724,17 +743,38 @@ pipe_tensor_fit()
 
   ### generate png of FA image and save to QC_DIR ###
   run_screen_grab_image ${output_dir}/dwi_FA.nii.gz \
-    ${SUB_ID}_dwi_FA 
+    ${SUB_ID}_dwi_FA_${REGRID_SIZE_FORMATTED} 
+}
+
+pipe_generate_additional_dti_maps()
+{
+  local tensor_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tensor_fit"
+  local L2="${tensor_dir}/dwi_L2.nii.gz"
+  local L3="${tensor_dir}/dwi_L3.nii.gz"
+  local MD="${tensor_dir}/dwi_MD.nii.gz"
+  local S0="${tensor_dir}/dwi_S0.nii.gz"
+
+  log "Generating additional DTI scalar maps in ${tensor_dir}"
+
+  ### axial diffusivity (AD = L1) ###
+  
+  # Radial diffusivity (RD = (L2 + L3)/2)
+  run_if_missing ${tensor_dir}/dwi_RD.nii.gz \
+    fslmaths "${L2}" -add "${L3}" -div 2 "${tensor_dir}/dwi_RD.nii.gz"
+
+  # Free water estimate (FW = S0 - MD) clipped at 0
+  run_if_missing ${tensor_dir}/dwi_FW_estimate.nii.gz \
+    fslmaths "${S0}" -sub "${MD}" -thr 0 "${tensor_dir}/dwi_FW_estimate.nii.gz"
 }
 
 pipe_tbss()
 {
   log "Running TBSS pipeline"
 
-  local tensor_dir="${OUT_BASE_DIR}/tensor_fit_${REGRID_SIZE_FORMATTED}"
+  local tensor_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tensor_fit"
   local fa_image="${tensor_dir}/dwi_FA.nii.gz"
   local tensor_image="${tensor_dir}/dwi_tensor.nii.gz"
-  local tbss_dir="${OUT_BASE_DIR}/tbss"
+  local tbss_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tbss"
   
   mkdir -p "${tbss_dir}/FA"
   mkdir -p "${tbss_dir}/tensor"
@@ -777,7 +817,7 @@ pipe_tbss()
 
   ### QC snapshot ###
   run_screen_grab_image "${tbss_dir}/stats/mean_FA_skeleton.nii.gz" \
-    ${SUB_ID}_tbss_skeleton
+    ${SUB_ID}_tbss_skeleton_${REGRID_SIZE_FORMATTED} 
 
   popd > /dev/null
 }
@@ -786,8 +826,8 @@ pipe_alps_extract()
 {
  log "Running ALPS extraction"
 
-  local tbss_tensor="${OUT_BASE_DIR}/tbss/FA/dwi_to_target_tensor.nii.gz"
-  local alps_dir="${OUT_BASE_DIR}/alps"
+  local tbss_tensor="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_to_target_tensor.nii.gz"
+  local alps_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_alps"
   local tensor_dir="${alps_dir}/tensor"
   local comp_nifti="${tensor_dir}/tensor_components.nii.gz"
   local tensor_csv="${alps_dir}/alps_tensor_components.csv"
@@ -839,7 +879,40 @@ pipe_alps_extract()
 
   log "ALPS extraction complete: ${index_csv}"
 
+  ### check exit that L_ALPS and R_ALPS are not empty ###
+  if [[ -z "${L_ALPS}" || -z "${R_ALPS}" ]]; then
+    log "ERROR: ALPS indices are empty"
+    exit 1
+  fi
 }
+
+pipe_cleanup()
+{
+  ### always remove SCRATCH_DIR_OUT, but do so super safely ###
+  if [[ -d "${SCRATCH_DIR_OUT}" ]]; then
+    ### ensure SCRATCH_DIR_OUT is not empty, not root, and starts with SCRATCH_DIR ###
+    if [[ -n "${SCRATCH_DIR}" && "${SCRATCH_DIR_OUT}" == "${SCRATCH_DIR}"/* && -d "${SCRATCH_DIR_OUT}" ]]; then
+      if [[ "${DRY_RUN}" -eq 1 ]]; then
+        log "DRY_RUN: would delete scratch directory: ${SCRATCH_DIR_OUT}"
+      else
+        log "Deleting scratch directory: ${SCRATCH_DIR_OUT}"
+        rm -rf "${SCRATCH_DIR_OUT}"
+      fi
+    else
+      log "WARNING: Unsafe scratch directory path, skipping deletion: ${SCRATCH_DIR_OUT}"
+    fi
+  fi
+
+  if [[ ${CLEANUP} -eq 1 ]]; then
+    if [[ "${DRY_RUN}" -eq 1 ]]; then
+      log "DRY_RUN: would perform additional cleanup (not implemented)"
+    else
+      log "Cleaning up temporary files"
+      log "TODO: implement additional cleanup if needed"
+    fi
+  fi
+}
+
 
 #-------------------------------------------------------------------------------
 ### MAIN ###
@@ -858,19 +931,20 @@ main()
 
   ### if no primary DWI is set, try to detect it ###
   if [[ -z "${PRIMARY_DWI_NII}" ]]; then
-    log "Primary DWI not set: auto-detecting..."
+    log "Auto-detecting DWI files..."
     detect_dti_files
   fi
 
   ### prep for preprocessing ###
   verify_minimum_required_inputs
 
+  ### halt if DRY_RUN is set ###
   if [[ ${DRY_RUN} -eq 1 ]]; then
     log "DRY_RUN is set to 1, skipping pipeline execution"
     return
   fi
 
-  ### start pipeline steps ###
+  ### start pipeline processing steps ###
   pipe_mrconvert
 
   ### run initial dwi preprocessing ###
@@ -891,6 +965,9 @@ main()
   ### run tensor fitting ###
   pipe_tensor_fit
 
+  ### run additional DTI maps generation ###
+  pipe_generate_additional_dti_maps
+
   ### run tbss ###
   pipe_tbss
 
@@ -898,6 +975,7 @@ main()
   pipe_alps_extract
 
   ### end pipeline ###
+  pipe_cleanup
   local end_time=$(date +%s)
   local elapsed_seconds=$((end_time - start_time))
   local elapsed_minutes=$((elapsed_seconds / 60))
