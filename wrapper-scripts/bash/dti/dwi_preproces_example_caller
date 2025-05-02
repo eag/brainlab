@@ -12,19 +12,19 @@ dwi_pfx="*"
 dry_run=0
 
 # BEAM TEST
-sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
-dwi_pfx="dwi"
+#sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
+#dwi_pfx="dwi"
+#dry_run=0
+
+# LEDUCQ TEST
+sub_ids="BCSA1F001"
+dwi_pfx="*"
 dry_run=0
 
-# ONDRI LEDUCQ TEST
-#sub_ids="sub-OND01BYC1006-sess-BL sub-OND01BYC1009_ses-BL BCSA1F001"
+# ONDRI TEST
+#sub_ids="sub-OND01BYC1006-sess-BL sub-OND01BYC1009_ses-BL"
 #dwi_pfx="*"
 #dry_run=0
-
-#sub_ids="sub-OND01BYC1006-sess-BL"
-#dwi_pfx="*"
-#dry_run=0
-
 
 
 

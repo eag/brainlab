@@ -8,10 +8,10 @@
 # - the input folder must contain either:
 #     1. a single DTI acquisition, or
 #     2. a DTI acquisition uniquely identified by the prefix <dwi_pfx*>
-# - does not verify that the input data is a DTI scan, otherwise will simply attempt 
+# - does not explicitly verify that the input data is a DTI scan, otherwise will simply attempt 
 #   to process and fail
 # - processing steps determined primarily from image and json sidecar data found in
-#   the input folder
+#   the input folder and specifics are written to the log file
 
 # TODO: 
 # - currently assumes "b0_1.nii.gz" and "b0_2.nii.gz" suffix for dual b0 acquisitions
@@ -112,7 +112,7 @@ setup_environment()
 
 setup_directories()
 {
-  ### check existence of required input directories ###
+  ### DRY_RUN existence of required input directories ###
   declare -A REQUIRED_DIRS=(
     ["Input directory"]="${IN_DIR}/${SUB_ID}"
     ["Scratch directory"]="${SCRATCH_DIR}"
@@ -136,7 +136,7 @@ setup_directories()
     }
   done
 
-  ### check writability of output directories ###
+  ### DRY_RUN writability of output directories ###
   declare -A WRITABLE_DIRS=(
     ["Scratch directory"]="${SCRATCH_DIR}"
     ["Output base directory"]="${OUT_BASE_DIR}"
@@ -198,43 +198,6 @@ check_exit()
 ### CONFIG FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
-run_enforce_pe_convention() 
-{
-  ### TODO: finish implementing (for for dual acquistions with two bvecs) ###
-  if [[ -f "${PRIMARY_DTI_JSON}" && -f "${RPE_JSON}" ]]; then
-    local pe_primary
-    local pe_rpe
-    pe_primary=$(jq -r '.PhaseEncodingDirection' "${PRIMARY_DTI_JSON}")
-    pe_rpe=$(jq -r '.PhaseEncodingDirection' "${RPE_JSON}")
-    log "Primary PE: ${pe_primary}"
-    log "RPE PE: ${pe_rpe}"
-
-    if [[ "${pe_primary}" == "j-" && "${pe_rpe}" == "j" ]]; then
-      log "Swapping primary and RPE DTI to enforce PE convention (prefer j over j-)"
-
-      # Swap NII
-      local tmp="${PRIMARY_DTI_NII}"
-      PRIMARY_DTI_NII="${RPE_DWI_NII}"
-      RPE_DWI_NII="${tmp}"
-
-      # Swap BVAL
-      tmp="${PRIMARY_DTI_BVAL}"
-      PRIMARY_DTI_BVAL="${RPE_BVAL}"
-      RPE_BVAL="${tmp}"
-
-      # Swap BVEC
-      tmp="${PRIMARY_DTI_BVEC}"
-      PRIMARY_DTI_BVEC="${RPE_BVEC}"
-      RPE_BVEC="${tmp}"
-
-      # Swap JSON
-      tmp="${PRIMARY_DTI_JSON}"
-      PRIMARY_DTI_JSON="${RPE_JSON}"
-      RPE_JSON="${tmp}"
-    fi
-  fi
-}
-
 detect_dti_files() {
   pushd "${IN_DIR}/${SUB_ID}" > /dev/null
 
@@ -242,7 +205,7 @@ detect_dti_files() {
   dti_files=(${DWI_PFX}*.bvec)
   if (( ${#dti_files[@]} > 2 )); then
     log "ERROR: More than two DTI .nii.gz files found — unknown scenario"
-    log "Please check input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*.nii.gz"
+    log "Please DRY_RUN input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*.nii.gz"
     exit 1
   fi
 
@@ -252,8 +215,15 @@ detect_dti_files() {
   if [[ -n "${RPE_B0_1}" && -n "${RPE_B0_2}" ]]; then
     RPE_B0_1_JSON="${RPE_B0_1%.nii.gz}.json"
     RPE_B0_2_JSON="${RPE_B0_2%.nii.gz}.json"
-
     if [[ -f "${RPE_B0_1}" && -f "${RPE_B0_1_JSON}" && -f "${RPE_B0_2}" && -f "${RPE_B0_2_JSON}" ]]; then
+      local pe_b0_1=$(jq -r '.PhaseEncodingDirection' "${RPE_B0_1_JSON}")
+      local pe_b0_2=$(jq -r '.PhaseEncodingDirection' "${RPE_B0_2_JSON}")
+      log "RPE b0_1 PE: ${pe_b0_1}"
+      log "RPE b0_2 PE: ${pe_b0_2}"
+      if [[ "${pe_b0_1}" != "${pe_b0_2}" ]]; then
+        log "ERROR: RPE b0_1 and b0_2 have different PhaseEncodingDirection"
+        exit 1
+      fi
       log "Found two RPE b0 images, generating combined rpe.mif"
       RPE_MIF="${OUT_DIR}/${SUB_ID}/dwi_detected_combined_rpe.mif"
       run_if_missing "${RPE_MIF}" \
@@ -267,7 +237,6 @@ detect_dti_files() {
     bval="${base}.bval"
     bvec="${base}.bvec"
     json="${base}.json"
-
     if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
       if ! jq -e 'has("PhaseEncodingDirection")' "$json" > /dev/null; then
         log "ERROR: PhaseEncodingDirection missing in ${json}"
@@ -282,7 +251,7 @@ detect_dti_files() {
     fi
   done
 
-  ### if no rpe.mif (b0_1/b0_2), look for second full DTI scan ###
+  ### if no rpe.mif (from b0_1/b0_2), look for second full DTI scan ###
   # TODO: implement
   if [[ -z "${RPE_MIF}" ]]; then
     for nii in ${DWI_PFX}*.nii.gz; do
@@ -291,15 +260,14 @@ detect_dti_files() {
       bval="${base}.bval"
       bvec="${base}.bvec"
       json="${base}.json"
-
       if [[ -f "${nii}" && -f "${bval}" && -f "${bvec}" && -f "${json}" ]]; then
         log "Found second DTI scan: ERROR -- not yet implemented"
-        break
+        exit 1
       fi
     done
   fi
 
-  ### if still no rpe.mif, look for standalone B0 volume with json only ###
+  ### if still no rpe.mif, look for single RPE volume with json only ###
   if [[ -z "${RPE_MIF}" ]]; then
     for nii in *.nii.gz; do
       [[ "$nii" == "${PRIMARY_DTI_NII}" ]] && continue
@@ -307,7 +275,6 @@ detect_dti_files() {
       bval="${base}.bval"
       bvec="${base}.bvec"
       json="${base}.json"
-
       if [[ -f "${json}" && ! -f "${bval}" && ! -f "${bvec}" ]]; then
         log "Found single-volume B0"
         RPE_DWI_NII="${nii}"
@@ -318,7 +285,7 @@ detect_dti_files() {
     done
   fi
 
-  ### finalize full paths for non-empty variables ###
+  ### finalize full paths for the non-empty variables ###
   for var in PRIMARY_DTI_NII PRIMARY_DTI_BVAL PRIMARY_DTI_BVEC PRIMARY_DTI_JSON \
              RPE_B0_1 RPE_B0_2 RPE_B0_1_JSON RPE_B0_2_JSON; do
     val="${!var}"
@@ -350,7 +317,7 @@ verify_minimum_required_inputs()
   if [[ -z "${PRIMARY_DTI_NII}" || -z "${PRIMARY_DTI_BVAL}" || \
         -z "${PRIMARY_DTI_BVEC}" || -z "${PRIMARY_DTI_JSON}" ]]; then
     log "ERROR: required input [nii.gz + json + bvec + bval] not found"
-    log "Please check input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*"
+    log "Please DRY_RUN input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*"
     exit 1
   fi
 }
@@ -609,14 +576,17 @@ pipe_dwipreproc()
   local input=${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
   local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
   local scratch_dir=${SCRATCH_DIR}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)
-  
+
+  ### run dwifslpreproc by scenario ###
   if [[ -f "${RPE_MIF}" && -n "${RPE_BVEC}" ]]; then
+  
     # scenario 3
     log "TODO: implement scenario 3 -- scenario 2 should work"
     exit 1
-  elif [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" ]]; then
-    # scenario 2
-    log "Running dwifslpreproc for DWI RPE B0 acquistion (scenario 2)"
+
+  elif [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" && -z ${RPE_B0_1} ]]; then
+    # scenario 2a
+    log "Running dwifslpreproc for DWI RPE (scenario 2a)"
     local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
     run_if_missing "${output}" \
       dwifslpreproc ${input} ${output} \
@@ -629,6 +599,24 @@ pipe_dwipreproc()
         -nthreads "${THREADS}" \
         -force
     check_exit $? "dwifslpreproc failed for ${input}"
+
+  elif [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" && -n "${RPE_B0_1}" ]]; then
+    # scenario 2b
+    log "Running dwifslpreproc for DWI RPE-PAIR (scenario 2b)"
+    local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
+    local pe=$(jq -r '.PhaseEncodingDirection' "${RPE_B0_1_JSON}")
+    run_if_missing "${output}" \
+      dwifslpreproc ${input} ${output} \
+        -rpe_pair -pe_dir=${pe} \
+        -se_epi ${rpe} -align_seepi \
+        -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility" \
+        -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
+        -info \
+        -scratch ${scratch_dir} \
+        -nthreads "${THREADS}" \
+        -force
+    check_exit $? "dwifslpreproc failed for ${input}"
+    
   else
     # scenario 1
     log "Running dwifslpreproc for DWI no RPE acquisition (scenario 1)"
@@ -644,7 +632,7 @@ pipe_dwipreproc()
     check_exit $? "dwifslpreproc failed for ${input}"
   fi
 
-  ### QC dwifslpreproc ###
+  ### qc dwifslpreproc ###
   cp ${OUT_BASE_DIR}/eddyqc_dir/quad/qc.pdf ${QC_DIR}/${SUB_ID}_quad_eddy_qc.pdf
   run_quantatitive_eddy_qc
   run_screen_grab_image \
@@ -856,6 +844,7 @@ main()
   setup_environment
   setup_directories  
   local start_time=$(date +%s)
+  log "----------------------------------------"
   log "DTI pipeline STARTED for ${SUB_ID}: time $(date '+%F %T')"
 
 
