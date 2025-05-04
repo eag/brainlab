@@ -1038,7 +1038,11 @@ main()
   pipe_calculate_free_water_fraction
 
   ### end pipeline ###
-  pipe_cleanup
+  if [[ -f "${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_free_water_fraction/FW_fraction.mif" ]]; then
+     pipe_cleanup
+  else
+     run_cleanup_scratch
+  fi
   local end_time=$(date +%s)
   local elapsed_seconds=$((end_time - start_time))
   local elapsed_minutes=$((elapsed_seconds / 60))
