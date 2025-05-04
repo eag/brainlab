@@ -84,7 +84,6 @@ parse_arguments()
   LOG_DIR="${OUT_DIR}/logs"
   LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
   REGRID_SIZE_FORMATTED=$(echo "${REGRID_SIZE}" | sed 's/,/_/g')
-
 }
 
 #-------------------------------------------------------------------------------
@@ -458,6 +457,7 @@ run_dwidenoise()
 {
   local input="$1"
   local output="$2"
+  
   run_if_missing "${output}" \
     dwidenoise "${input}" "${output}" -nthreads "${THREADS}"
   check_exit $? "dwidenoise failed for ${input}"
@@ -467,7 +467,7 @@ run_degibbs()
 {
   local input="$1"
   local output="$2"
-   
+
   run_if_missing "${output}" \
     mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes ${SLICE_OR}
   check_exit $? "mrdegibbs failed for ${input}"
@@ -942,8 +942,6 @@ run_cleanup_scratch()
 
 pipe_cleanup()
 {
-
-  ### delete TMP_SCRATCH_DIR ###
   run_cleanup_scratch
 
   pushd "${OUT_DIR_ROOT}" > /dev/null

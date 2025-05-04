@@ -1,0 +1,53 @@
+#!/bin/baash
+# ------------------------------------------------------------------------------
+### PROCESSING NOTES ###
+#-------------------------------------------------------------------------------
+
+#SBATCH --account=def-mgoubran
+#SBATCH --time=00:60:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=8G
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=your_email@example.com
+#SBATCH --output=slurm_%x_%j.out
+#SBATCH --array=1-1%1
+
+# ------------------------------------------------------------------------------
+### SETUP ###
+#-------------------------------------------------------------------------------
+
+list_fn=${HOME}/tmp/subject_list_1.txt
+in_dir="${HOME}/tmp/dti_test_datasets/organized"
+out_dir="${HOME}/tmp/dti_test_datasets/derivatives/dti"
+scratch_dir="${HOME}/tmp/junk"
+alps_roi_dir="${HOME}/tmp/alps-rois"
+threads=8
+dry_run=0
+regrid_size="1,1,1" 
+dwi_pfx="*"
+dry_run=0
+cleanup=0
+
+BRAINLAB_DIR=${HOME}/work/code/brainlab
+
+# ------------------------------------------------------------------------------
+### JOB ###
+#-------------------------------------------------------------------------------
+
+IDX=${SLURM_ARRAY_TASK_ID}
+sub_id=$(sed -n "${IDX}p" ${list_fn})
+
+${BRAINLAB_DIR}/wrapper-scripts/bash/blt_dwi_preprocess \
+  --in_dir "${in_dir}" \
+  --out_dir "${out_dir}" \
+  --scratch_dir_root "${scratch_dir}" \
+  --alps_roi_dir "${alps_roi_dir}" \
+  --threads "${threads}" \
+  --dry_run "${dry_run}" \
+  --sub_id "${sub_id}" \
+  --dwi_pfx "${dwi_pfx}" \
+  --regrid_size "${regrid_size}" \
+  --cleanup "${cleanup}"
+
+# ------------------------------------------------------------------------------
