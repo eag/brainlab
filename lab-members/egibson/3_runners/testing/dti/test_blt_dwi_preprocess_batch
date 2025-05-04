@@ -1,16 +1,18 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
 ### PROCESSING NOTES (CEDAR) ###
-#  - C6 (4): 46 min @ 9 GB
+#  - BEAM:   8 cores: ~01:40:00 @ 9 GB
+#  - ONDRI:  8 cores: ~01:09:00 @ 8 GB
+#  - LEDUCQ: 6 cores: ?
 #-------------------------------------------------------------------------------
 
 #SBATCH --account=def-mgoubran
-#SBATCH --time=02:30:00
+#SBATCH --time=04:30:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=6
 #SBATCH --mem=16G
 #SBATCH --output=slurm_%x_%A_%a.out
-#SBATCH --array=6-6%1
+#SBATCH --array=5-5%1
 
 # ------------------------------------------------------------------------------
 ### SETUP ###
@@ -21,7 +23,7 @@ in_dir="${SCRATCH}/dti_test/organized"
 out_dir="${SCRATCH}/dti_test/derivatives/dti"
 scratch_dir="${SCRATCH}/junk"
 alps_roi_dir="${SCRATCH}/shared/resources/alps-rois"
-threads=4
+threads=6
 dry_run=0
 regrid_size="1,1,1" 
 dwi_pfx="*"
