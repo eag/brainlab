@@ -409,10 +409,8 @@ run_screen_grab_image()
   local overlay="$3"
  
   local gui_runner=""
-  if [[ "${CC_CLUSTER}" == "cedar" ]]; then
-    gui_runner="run-xvfb"
-  elif [[ "${CC_CLUSTER}" == "narval" ]]; then
-    gui_runner=xvfb-run
+  if [[ "${CC_CLUSTER}" == "cedar" || "${CC_CLUSTER}" == "narval" ]]; then
+    gui_runner="xvfb-run"
   fi
 
   local cmd="${gui_runner} mrview ${input}"
