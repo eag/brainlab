@@ -1,6 +1,7 @@
 #!/bin/baash
 # ------------------------------------------------------------------------------
 ### PROCESSING NOTES ###
+#
 #-------------------------------------------------------------------------------
 
 #SBATCH --account=def-mgoubran
@@ -17,11 +18,11 @@
 ### SETUP ###
 #-------------------------------------------------------------------------------
 
-list_fn=${HOME}/tmp/subject_list_1.txt
-in_dir="${HOME}/tmp/dti_test_datasets/organized"
-out_dir="${HOME}/tmp/dti_test_datasets/derivatives/dti"
-scratch_dir="${HOME}/tmp/junk"
-alps_roi_dir="${HOME}/tmp/alps-rois"
+list_fn="${SCRATCH}/subject_list_1.txt"
+in_dir="${SCRATCH}/dti_test/organized"
+out_dir="${SCRATCH}/dti_test/derivatives/dti"
+scratch_dir="${SCRATCH}/junk"
+alps_roi_dir="${SCRATCH}/shared/resources/alps-rois"
 threads=8
 dry_run=0
 regrid_size="1,1,1" 
@@ -37,6 +38,7 @@ BRAINLAB_DIR=${HOME}/work/code/brainlab
 
 IDX=${SLURM_ARRAY_TASK_ID}
 sub_id=$(sed -n "${IDX}p" ${list_fn})
+mkdir -p ${scratch_dir}
 
 ${BRAINLAB_DIR}/wrapper-scripts/bash/blt_dwi_preprocess \
   --in_dir "${in_dir}" \
