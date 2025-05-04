@@ -1,6 +1,6 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-# @file dwi_preprocess.sh
+# @file sbt_dwi_preprocess
 #
 # This script performs standard DTI preprocessing steps suitable for clinical data.
 # EPI distortion correction is performed only if RPE data was acquired.
@@ -44,7 +44,7 @@ parse_arguments()
 {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --in_dir|--out_dir|--scratch_dir|--alps_roi_dir|--threads|--dry_run|--sub_id|--dwi_pfx|--regrid_size|--cleanup)
+      --in_dir|--out_dir|--scratch_dir_root|--alps_roi_dir|--threads|--dry_run|--sub_id|--dwi_pfx|--regrid_size|--cleanup)
         flag=$(echo "${1#--}" | tr '[:lower:]' '[:upper:]')  # e.g., in_dir -> IN_DIR
         value="$2"
         if [[ -z "$value" || "$value" == --* ]]; then
@@ -55,7 +55,7 @@ parse_arguments()
         shift 2
         ;;
       -h|--help)
-        echo "Usage: $0 --in_dir DIR --out_dir DIR --scratch_dir DIR --alps_roi_dir DIR"
+        echo "Usage: $0 --in_dir DIR --out_dir DIR --scratch_dir_root DIR --alps_roi_dir DIR"
         echo "          --threads N --dry_run 0|1 --sub_id ID --dwi_pfx PFX --regrid_size X,Y,Z --cleanup 0|1"
         echo -e "Notes\n  PFX=\"*\" for folders containing a single DTI acquisition"
         exit 0
@@ -69,7 +69,7 @@ parse_arguments()
 
   ### confirm all required global variables are set ###
   required_vars=(
-    IN_DIR OUT_DIR SCRATCH_DIR ALPS_ROI_DIR THREADS DRY_RUN SUB_ID DWI_PFX REGRID_SIZE CLEANUP
+    IN_DIR OUT_DIR SCRATCH_DIR_ROOT ALPS_ROI_DIR THREADS DRY_RUN SUB_ID DWI_PFX REGRID_SIZE CLEANUP
   )
   for var in "${required_vars[@]}"; do
     if [[ -z "${!var}" ]]; then
@@ -78,13 +78,13 @@ parse_arguments()
     fi
   done
 
-  ### set all other global variables ###
-  OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
+  ### set derived global variables ###
+  OUT_DIR_ROOT="${OUT_DIR}/${SUB_ID}"
   QC_DIR="${OUT_DIR}/qc"
   LOG_DIR="${OUT_DIR}/logs"
   LOG_FN=${LOG_DIR}/${SUB_ID}_dwi_preprocess.log
   REGRID_SIZE_FORMATTED=$(echo "${REGRID_SIZE}" | sed 's/,/_/g')
-  SCRATCH_DIR_OUT="${SCRATCH_DIR}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)"
+
 }
 
 #-------------------------------------------------------------------------------
@@ -134,7 +134,7 @@ setup_directories()
   ### check existence of required input directories ###
   declare -A REQUIRED_DIRS=(
     ["Input directory"]="${IN_DIR}/${SUB_ID}"
-    ["Scratch directory"]="${SCRATCH_DIR}"
+    ["Scratch directory root"]="${SCRATCH_DIR_ROOT}"
     ["ALPS ROI directory"]="${ALPS_ROI_DIR}"
   )
 
@@ -147,7 +147,7 @@ setup_directories()
   done
 
   ### create output directories  ###
-  for dir in "${OUT_BASE_DIR}" "${QC_DIR}" "${LOG_DIR}"; do
+  for dir in "${OUT_DIR_ROOT}" "${QC_DIR}" "${LOG_DIR}"; do
     mkdir -p "${dir}" || 
     {
       echo "ERROR: Failed to create output directory: ${dir}" >&2
@@ -157,8 +157,8 @@ setup_directories()
 
   ### check writability of output directories ###
   declare -A WRITABLE_DIRS=(
-    ["Scratch directory"]="${SCRATCH_DIR}"
-    ["Output base directory"]="${OUT_BASE_DIR}"
+    ["Scratch directory"]="${SCRATCH_DIR_ROOT}"
+    ["Output base directory"]="${OUT_DIR_ROOT}"
   )
 
   for label in "${!WRITABLE_DIRS[@]}"; do
@@ -169,13 +169,24 @@ setup_directories()
     fi
   done
 
-  ### create directory in scratch directory for dwibiascorrect ###
+  ### guard against unsafe SCRATCH_DIR_ROOT directory (bad symlinks etc) ###
+  SCRATCH_PARENT=$(realpath "${SCRATCH_DIR_ROOT}")
+  if [[ -z "${SCRATCH_PARENT}" || "${SCRATCH_PARENT}" == "/" ]]; then
+    echo "ERROR: Invalid or unsafe scratch parent: ${SCRATCH_DIR_ROOT}" >&2
+    exit 1
+  fi
+
+  ### create TMP_SCRATCH_DIR ###
+  TMP_SCRATCH_DIR="${SCRATCH_PARENT}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)"
   if [[ ${DRY_RUN} -eq 0 ]]; then
-    mkdir ${SCRATCH_DIR_OUT} || 
+    log "Creating scratch directory: ${TMP_SCRATCH_DIR}"
+    mkdir ${TMP_SCRATCH_DIR} || 
     {
-      echo "ERROR: Failed to create scratch directory: ${SCRATCH_DIR_OUT}" >&2
+      echo "ERROR: Failed to create scratch directory: ${TMP_SCRATCH_DIR}" >&2
       exit 1
     }
+  else
+    log "Skipping scratch directory creation for test run: ${TMP_SCRATCH_DIR}"
   fi
 }
 
@@ -201,17 +212,6 @@ run_if_exists()
   fi
 }
 
-setup_output_directories()
-{
-  OUT_BASE_DIR="${OUT_DIR}/${SUB_ID}"
-  QC_DIR="${OUT_DIR}/qc"
-  LOG_DIR="${OUT_DIR}/logs"
-  LOG_FN="${LOG_DIR}/${SUB_ID}_dwi_preprocess.log"
-
-  mkdir -p "${OUT_BASE_DIR}" "${QC_DIR}" "${LOG_DIR}"
-  : > "${LOG_FN}" 
-}
-
 check_exit() 
 {
   local status=$1
@@ -223,8 +223,32 @@ check_exit()
   fi
 }
 
+verify_minimum_required_inputs()
+{
+  log "PRIMARY_DWI_NII : $(basename "${PRIMARY_DWI_NII:-}")"
+  log "PRIMARY_DWI_BVAL: $(basename "${PRIMARY_DWI_BVAL:-}")"
+  log "PRIMARY_DWI_BVEC: $(basename "${PRIMARY_DWI_BVEC:-}")"
+  log "PRIMARY_DWI_JSON: $(basename "${PRIMARY_DWI_JSON:-}")"
+  log "RPE_DWI_NII    : $(basename "${RPE_DWI_NII:-}")"
+  log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
+  log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
+  log "RPE_JSON      : $(basename "${RPE_JSON:-}")"
+  log "RPE_B0_1      : $(basename "${RPE_B0_1:-}")"
+  log "RPE_B0_2      : $(basename "${RPE_B0_2:-}")"
+  log "RPE_B0_1_JSON  : $(basename "${RPE_B0_1_JSON:-}")"
+  log "RPE_B0_2_JSON  : $(basename "${RPE_B0_2_JSON:-}")"
+  log "RPE_MIF       : $(basename "${RPE_MIF:-}")"
+
+  if [[ -z "${PRIMARY_DWI_NII}" || -z "${PRIMARY_DWI_BVAL}" || \
+        -z "${PRIMARY_DWI_BVEC}" || -z "${PRIMARY_DWI_JSON}" ]]; then
+    log "ERROR: required input [nii.gz + json + bvec + bval] not found"
+    log "Please check input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*"
+    exit 1
+  fi
+}
+
 #-------------------------------------------------------------------------------
-### CONFIG FUNCTIONS ###
+### AUTO-DETECTION FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
 detect_dti_files() {
@@ -327,33 +351,9 @@ detect_dti_files() {
   popd > /dev/null
 }
 
-verify_minimum_required_inputs()
-{
-  log "PRIMARY_DWI_NII : $(basename "${PRIMARY_DWI_NII:-}")"
-  log "PRIMARY_DWI_BVAL: $(basename "${PRIMARY_DWI_BVAL:-}")"
-  log "PRIMARY_DWI_BVEC: $(basename "${PRIMARY_DWI_BVEC:-}")"
-  log "PRIMARY_DWI_JSON: $(basename "${PRIMARY_DWI_JSON:-}")"
-  log "RPE_DWI_NII    : $(basename "${RPE_DWI_NII:-}")"
-  log "RPE_BVAL      : $(basename "${RPE_BVAL:-}")"
-  log "RPE_BVEC      : $(basename "${RPE_BVEC:-}")"
-  log "RPE_JSON      : $(basename "${RPE_JSON:-}")"
-  log "RPE_B0_1      : $(basename "${RPE_B0_1:-}")"
-  log "RPE_B0_2      : $(basename "${RPE_B0_2:-}")"
-  log "RPE_B0_1_JSON  : $(basename "${RPE_B0_1_JSON:-}")"
-  log "RPE_B0_2_JSON  : $(basename "${RPE_B0_2_JSON:-}")"
-  log "RPE_MIF       : $(basename "${RPE_MIF:-}")"
-
-  if [[ -z "${PRIMARY_DWI_NII}" || -z "${PRIMARY_DWI_BVAL}" || \
-        -z "${PRIMARY_DWI_BVEC}" || -z "${PRIMARY_DWI_JSON}" ]]; then
-    log "ERROR: required input [nii.gz + json + bvec + bval] not found"
-    log "Please check input directory: ${IN_DIR}/${SUB_ID}/${DWI_PFX}*"
-    exit 1
-  fi
-}
-
 detect_slice_orientation_from_json() 
 {
-  local json_file="$1"
+  local json_file="${PRIMARY_DWI_JSON}"
 
   if [[ ! -f "${json_file}" ]]; then
     return
@@ -386,6 +386,12 @@ detect_slice_orientation_from_json()
   else
     SLICE_OR="1,2" # sagittal
   fi
+  
+  if [[ -z "${SLICE_OR}" ]]; then
+    log "ERROR: Unable to determine slice orientation from JSON"
+    exit 1
+  fi
+  
   log "Slice orientation detected: ${SLICE_OR}"
 
   if [[ "${SLICE_OR}" != "0,1" ]]; then
@@ -394,79 +400,8 @@ detect_slice_orientation_from_json()
 }
 
 #-------------------------------------------------------------------------------
-### PREPROCESSING FUNCTIONS ###
+### QC FUNCTIONS ###
 #-------------------------------------------------------------------------------
-# - "pipe_" : pipeline functions that operate on staged filenames
-# - "run_"  : utility functions used by pipe functions with filenames as arguments
-
-run_create_rpe()
-{
-  local nii="$1"
-  local json="$2"
-  local out_mif="$3"
-
-  if [[ ${DRY_RUN} -eq 1 ]]; then
-    log "Skipping RPE creation for test run"
-    return
-  fi
-
-  run_if_missing "${out_mif}" \
-    mrconvert "${nii}" "${out_mif}" -json_import "${json}" -quiet -force
-  check_exit $? "mrconvert failed for ${nii}"
-}
-
-run_create_combined_rpe() {
-  local b0_1="$1"
-  local b0_1_json="$2"
-  local b0_2="$3"
-  local b0_2_json="$4"
-  local out_mif="$5"
-
-  if [[ ${DRY_RUN} -eq 1 ]]; then
-    log "Skipping RPE creation for test run"
-    return
-  fi
-
-  if [[ -f "${out_mif}" ]]; then
-    log "RPE already exists, skipping creation"
-    exit 0
-  fi
-
-  local tmp1=$(mktemp "$(pwd)/tmp_rpe_$(date +%Y%m%d)_XXXXXX.mif")
-  local tmp2=$(mktemp "$(pwd)/tmp_rpe_$(date +%Y%m%d)_XXXXXX.mif")
-
-  mrconvert "${b0_1}" "${tmp1}" -json_import "${b0_1_json}" -quiet -force
-  mrconvert "${b0_2}" "${tmp2}" -json_import "${b0_2_json}" -quiet -force
-  mrcat "${tmp1}" "${tmp2}" -axis 3 "${out_mif}" -quiet -force
-  check_exit $? "create combined rpe failed"
-
-  rm -f "${tmp1}" "${tmp2}"
-}
-
-run_dwidenoise() 
-{
-  local input="$1"
-  local output="$2"
-  run_if_missing "${output}" \
-    dwidenoise "${input}" "${output}" -nthreads "${THREADS}"
-  check_exit $? "dwidenoise failed for ${input}"
-}
-
-run_degibbs() 
-{
-  local input="$1"
-  local output="$2"
-  detect_slice_orientation_from_json "${PRIMARY_DWI_JSON}"
-  
-  if [[ -z "${SLICE_OR}" ]]; then
-    log "Slice orientation not detected, using default (0,1)"
-    SLICE_OR="0,1"
-  fi
-  
-  run_if_missing "${output}" \
-    mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes "${SLICE_OR}"
-  check_exit $? "mrdegibbs failed for ${input}"
-}
 
 run_screen_grab_image()
 {
@@ -513,10 +448,81 @@ run_qc_residual()
   run_screen_grab_image "${output}" "${png_pfx}"
 }
 
+#-------------------------------------------------------------------------------
+### PROCESSING FUNCTIONS ###
+#-------------------------------------------------------------------------------
+# - "pipe_" : pipeline functions that operate on staged filenames
+# - "run_"  : utility functions used by pipe functions with filenames as arguments
+
+run_dwidenoise() 
+{
+  local input="$1"
+  local output="$2"
+  run_if_missing "${output}" \
+    dwidenoise "${input}" "${output}" -nthreads "${THREADS}"
+  check_exit $? "dwidenoise failed for ${input}"
+}
+
+run_degibbs() 
+{
+  local input="$1"
+  local output="$2"
+   
+  run_if_missing "${output}" \
+    mrdegibbs "${input}" "${output}" -nthreads "${THREADS}" -axes ${SLICE_OR}
+  check_exit $? "mrdegibbs failed for ${input}"
+}
+
+run_create_rpe()
+{
+  local nii="$1"
+  local json="$2"
+  local out_mif="$3"
+
+  if [[ ${DRY_RUN} -eq 1 ]]; then
+    log "Skipping RPE creation for test run"
+    return
+  fi
+
+  run_if_missing "${out_mif}" \
+    mrconvert "${nii}" "${out_mif}" -json_import "${json}" -quiet -force
+  check_exit $? "mrconvert failed for ${nii}"
+}
+
+run_create_combined_rpe() 
+{
+  local b0_1="$1"
+  local b0_1_json="$2"
+  local b0_2="$3"
+  local b0_2_json="$4"
+  local out_mif="$5"
+
+  if [[ ${DRY_RUN} -eq 1 ]]; then
+    log "Skipping RPE creation for test run"
+    return
+  fi
+
+  if [[ -f "${out_mif}" ]]; then
+    log "RPE already exists, skipping creation"
+    exit 0
+  fi
+
+  local tmp1=$(mktemp "$(pwd)/tmp_rpe_$(date +%Y%m%d)_XXXXXX.mif")
+  local tmp2=$(mktemp "$(pwd)/tmp_rpe_$(date +%Y%m%d)_XXXXXX.mif")
+
+  mrconvert "${b0_1}" "${tmp1}" -json_import "${b0_1_json}" -quiet -force
+  mrconvert "${b0_2}" "${tmp2}" -json_import "${b0_2_json}" -quiet -force
+  mrcat "${tmp1}" "${tmp2}" -axis 3 "${out_mif}" -quiet -force
+  check_exit $? "create combined rpe failed"
+
+  rm -f "${tmp1}" "${tmp2}"
+}
+
+
 pipe_mrconvert()
 {
-  run_if_missing "${OUT_BASE_DIR}/dwi.mif" \
-    mrconvert ${PRIMARY_DWI_NII} "${OUT_BASE_DIR}/dwi.mif" \
+  run_if_missing "${OUT_DIR_ROOT}/dwi.mif" \
+    mrconvert ${PRIMARY_DWI_NII} "${OUT_DIR_ROOT}/dwi.mif" \
       -fslgrad ${PRIMARY_DWI_BVEC} ${PRIMARY_DWI_BVAL} \
       -json_import ${PRIMARY_DWI_JSON} \
       -nthreads "${THREADS}"
@@ -525,8 +531,8 @@ pipe_mrconvert()
 
 pipe_quantatitive_eddy_qc()
 {
-  local eddy_dir="${OUT_BASE_DIR}/eddyqc_dir"
-  local input_dwi="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif"
+  local eddy_dir="${OUT_DIR_ROOT}/eddyqc_dir"
+  local input_dwi="${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy.mif"
   local output_csv="${QC_DIR}/${SUB_ID}_eddy_qc_quantitative.csv"
 
   local file_movement_rms="${eddy_dir}/eddy_movement_rms"
@@ -563,20 +569,20 @@ pipe_dwi_preprocessing()
 {
   log "preprocessing DWI"
 
-  run_dwidenoise ${OUT_BASE_DIR}/dwi.mif \
-    ${OUT_BASE_DIR}/dwi_denoised.mif
+  run_dwidenoise ${OUT_DIR_ROOT}/dwi.mif \
+    ${OUT_DIR_ROOT}/dwi_denoised.mif
   
-  run_degibbs ${OUT_BASE_DIR}/dwi_denoised.mif \
-    ${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
+  run_degibbs ${OUT_DIR_ROOT}/dwi_denoised.mif \
+    ${OUT_DIR_ROOT}/dwi_denoised_degibbs.mif
 
-  run_qc_residual ${OUT_BASE_DIR}/dwi.mif \
-    ${OUT_BASE_DIR}/dwi_denoised.mif \
-    ${OUT_BASE_DIR}/dwi_denoised_residuals.mif \
+  run_qc_residual ${OUT_DIR_ROOT}/dwi.mif \
+    ${OUT_DIR_ROOT}/dwi_denoised.mif \
+    ${OUT_DIR_ROOT}/dwi_denoised_residuals.mif \
     ${SUB_ID}_dwi_denoised_residuals
     
-  run_qc_residual ${OUT_BASE_DIR}/dwi_denoised.mif \
-    ${OUT_BASE_DIR}/dwi_denoised_degibbs.mif \
-    ${OUT_BASE_DIR}/dwi_denoised_degibbs_residuals.mif \
+  run_qc_residual ${OUT_DIR_ROOT}/dwi_denoised.mif \
+    ${OUT_DIR_ROOT}/dwi_denoised_degibbs.mif \
+    ${OUT_DIR_ROOT}/dwi_denoised_degibbs_residuals.mif \
     ${SUB_ID}_dwi_denoised_degibbs_residuals
 }
 
@@ -585,14 +591,9 @@ pipe_rpe_preprocessing()
   ### preprocess rpe, if available (scenario 2) ###
   if [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" ]]; then
     log "preprocessing RPE B0"
-    log "denoising set to null operation"
+    log "denoising skipped for rpe (scenario 2)"
     run_degibbs ${RPE_MIF} \
-      "${OUT_BASE_DIR}/rpe_denoised_degibbs.mif"
-
-    run_qc_residual ${RPE_MIF} \
-      ${OUT_BASE_DIR}/rpe_denoised_degibbs.mif \
-      ${OUT_BASE_DIR}/rpe_denoised_degibbs_residuals.mif \
-      ${SUB_ID}_rpe_denoised_degibbs_residuals
+      "${OUT_DIR_ROOT}/rpe_denoised_degibbs.mif"
   fi
 
   ### TODO: implement scenario 3 ###
@@ -600,9 +601,9 @@ pipe_rpe_preprocessing()
 
 pipe_dwipreproc()
 {
-  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs.mif
-  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
-  local scratch_dir=${SCRATCH_DIR_OUT}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)
+  local input=${OUT_DIR_ROOT}/dwi_denoised_degibbs.mif
+  local output=${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy.mif
+  local scratch_dir=${TMP_SCRATCH_DIR}/tmp_${SUB_ID}_$(date +%Y%m%d_%H%M%S)
 
   ### run dwifslpreproc by scenario ###
   if [[ -f "${RPE_MIF}" && -n "${RPE_BVEC}" ]]; then
@@ -614,13 +615,13 @@ pipe_dwipreproc()
   elif [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" && -z ${RPE_B0_1} ]]; then
     # scenario 2a
     log "Running dwifslpreproc for DWI RPE (scenario 2a)"
-    local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
+    local rpe=${OUT_DIR_ROOT}/rpe_denoised_degibbs.mif
     run_if_missing "${output}" \
       dwifslpreproc ${input} ${output} \
         -rpe_header \
         -se_epi ${rpe} -align_seepi \
         -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility" \
-        -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
+        -eddyqc_all ${OUT_DIR_ROOT}/eddyqc_dir \
         -info \
         -scratch ${scratch_dir} \
         -nthreads "${THREADS}" \
@@ -630,14 +631,14 @@ pipe_dwipreproc()
   elif [[ -f "${RPE_MIF}" && -z "${RPE_BVEC}" && -n "${RPE_B0_1}" ]]; then
     # scenario 2b
     log "Running dwifslpreproc for DWI RPE-PAIR (scenario 2b)"
-    local rpe=${OUT_BASE_DIR}/rpe_denoised_degibbs.mif
+    local rpe=${OUT_DIR_ROOT}/rpe_denoised_degibbs.mif
     local pe=$(jq -r '.PhaseEncodingDirection' "${RPE_B0_1_JSON}")
     run_if_missing "${output}" \
       dwifslpreproc ${input} ${output} \
         -rpe_pair -pe_dir=${pe} \
         -se_epi ${rpe} -align_seepi \
         -eddy_options "--slm=linear --repol --data_is_shelled --verbose --estimate_move_by_susceptibility" \
-        -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
+        -eddyqc_all ${OUT_DIR_ROOT}/eddyqc_dir \
         -info \
         -scratch ${scratch_dir} \
         -nthreads "${THREADS}" \
@@ -651,7 +652,7 @@ pipe_dwipreproc()
       dwifslpreproc ${input} ${output} \
         -rpe_header \
         -eddy_options "--slm=linear --repol --data_is_shelled --verbose" \
-        -eddyqc_all ${OUT_BASE_DIR}/eddyqc_dir \
+        -eddyqc_all ${OUT_DIR_ROOT}/eddyqc_dir \
         -info \
         -scratch ${scratch_dir} \
         -nthreads "${THREADS}" \
@@ -660,7 +661,7 @@ pipe_dwipreproc()
   fi
 
   ### qc dwifslpreproc ###
-  cp ${OUT_BASE_DIR}/eddyqc_dir/quad/qc.pdf ${QC_DIR}/${SUB_ID}_quad_eddy_qc.pdf
+  cp ${OUT_DIR_ROOT}/eddyqc_dir/quad/qc.pdf ${QC_DIR}/${SUB_ID}_quad_eddy_qc.pdf
   pipe_quantatitive_eddy_qc
   run_screen_grab_image \
     ${output} \
@@ -670,9 +671,9 @@ pipe_dwipreproc()
 
 pipe_bias_correct()
 {
-  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy.mif
-  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4.mif
-  local mask=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_mask.mif
+  local input=${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy.mif
+  local output=${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4.mif
+  local mask=${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_mask.mif
 
   run_if_missing ${mask} \
     dwi2mask "${input}" "${mask}" -nthreads "${THREADS}"
@@ -681,14 +682,14 @@ pipe_bias_correct()
     dwibiascorrect ants "${input}" "${output}" \
     -mask "${mask}" \
     -nthreads "${THREADS}" \
-    -scratch "${SCRATCH_DIR_OUT}" 
+    -scratch "${TMP_SCRATCH_DIR}" 
   check_exit $? "dwibiascorrect failed for ${input}"
 }
 
 pipe_upsample()
 {
-  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4.mif
-  local output=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}.mif
+  local input=${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4.mif
+  local output=${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}.mif
   
   ### upsample if needed, otherwise symlink ###
   current_spacing=$(mrinfo "${input}" -spacing | cut -d' ' -f 1-3 | sed "s/ /,/g")
@@ -706,10 +707,8 @@ pipe_upsample()
 
 pipe_tensor_fit()
 {
-  local input=${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}.mif 
-  local output_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tensor_fit"
-  local mask="${OUT_BASE_DIR}/dwi_denoised_degibbs_eddy_mask.mif"
-  local mask_regrid=${output_dir}/dwi_mask.nii.gz
+  local input=${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}.mif 
+  local output_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_tensor_fit"
   
   mkdir -p "${output_dir}"
 
@@ -724,18 +723,16 @@ pipe_tensor_fit()
       -export_grad_mrtrix "${mrtrix_grad}" \
       -nthreads "${THREADS}" -info
 
-  ### resize mask ###
-  run_if_missing "${mask_regrid}" \
-    mrgrid ${mask} \
-      regrid -voxel ${REGRID_SIZE} ${mask_regrid} \
-      -interp nearest -force -nthreads "${THREADS}"
-
+  ### create mask for tensor fit ###
+  local mask="${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}_mask.nii.gz"
+  bet "${dwi_nii}" ${mask} -f 0.3
+  
   ### run DTI fitting ###
   run_if_missing "${output_dir}/dwi_FA.nii.gz" \
     dtifit \
       --data="${dwi_nii}" \
       --out="${output_dir}/dwi" \
-      --mask="${mask_regrid}" \
+      --mask="${mask}" \
       --bvecs="${bvec}" \
       --bvals="${bval}" \
       --save_tensor
@@ -748,11 +745,9 @@ pipe_tensor_fit()
 
 pipe_generate_additional_dti_maps()
 {
-  local tensor_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tensor_fit"
+  local tensor_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_tensor_fit"
   local L2="${tensor_dir}/dwi_L2.nii.gz"
   local L3="${tensor_dir}/dwi_L3.nii.gz"
-  local MD="${tensor_dir}/dwi_MD.nii.gz"
-  local S0="${tensor_dir}/dwi_S0.nii.gz"
 
   log "Generating additional DTI scalar maps in ${tensor_dir}"
 
@@ -761,24 +756,16 @@ pipe_generate_additional_dti_maps()
   ### Radial diffusivity (RD = (L2 + L3)/2) ###
   run_if_missing ${tensor_dir}/dwi_RD.nii.gz \
     fslmaths "${L2}" -add "${L3}" -div 2 "${tensor_dir}/dwi_RD.nii.gz"
-
-  ### Free water estimate (FW = S0 - MD) clipped at 0 ###
-  run_if_missing ${tensor_dir}/dwi_FW_estimate.nii.gz \
-    fslmaths "${S0}" -sub "${MD}" -thr 0 "${tensor_dir}/dwi_FW_estimate.nii.gz"
-
-  ### generate png of free water maps and save to QC_DIR ###
-  run_screen_grab_image ${tensor_dir}/dwi_FW_estimate.nii.gz \
-    ${SUB_ID}_dwi_FW_estimate_${REGRID_SIZE_FORMATTED}
 }
 
 pipe_tbss()
 {
   log "Running TBSS pipeline"
 
-  local tensor_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tensor_fit"
+  local tensor_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_tensor_fit"
   local fa_image="${tensor_dir}/dwi_FA.nii.gz"
   local tensor_image="${tensor_dir}/dwi_tensor.nii.gz"
-  local tbss_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tbss"
+  local tbss_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_tbss"
   
   mkdir -p "${tbss_dir}/FA"
   mkdir -p "${tbss_dir}/tensor"
@@ -830,8 +817,8 @@ pipe_alps_extract()
 {
  log "Running ALPS extraction"
 
-  local tbss_tensor="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_to_target_tensor.nii.gz"
-  local alps_dir="${OUT_BASE_DIR}/${REGRID_SIZE_FORMATTED}_alps"
+  local tbss_tensor="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_to_target_tensor.nii.gz"
+  local alps_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_alps"
   local tensor_dir="${alps_dir}/tensor"
   local comp_nifti="${tensor_dir}/tensor_components.nii.gz"
   local tensor_csv="${alps_dir}/alps_tensor_components.csv"
@@ -890,78 +877,105 @@ pipe_alps_extract()
   fi
 }
 
+pipe_calculate_free_water_fraction() 
+{
+  local dwi="${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}.mif"
+  local mask="${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}_mask.nii.gz"
+  local output_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_free_water_fraction"
+  local bval="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_tensor_fit/dwi.bvals"
+
+  n_shells=$(cat ${bval} | tr ' ' '\n' | awk '$1 > 50' | sort -n | uniq | wc -l)
+
+  log "Number of shells: ${n_shells}"
+  if [[ ${n_shells} -lt 2 ]]; then
+    log "WARNING: Single-shell data — FW_fraction.mif is semi-quantitative only"
+  fi
+
+  mkdir -p "${output_dir}"
+
+  log "Running tissue response estimation (dhollander)..."
+  run_if_missing "${output_dir}/wm.txt" \
+    dwi2response dhollander "$dwi" \
+      "${output_dir}/wm.txt" "${output_dir}/gm.txt" "${output_dir}/csf.txt" \
+      -mask "$mask" -nthreads "$THREADS" -force -scratch "${TMP_SCRATCH_DIR}"
+  check_exit $? "dwi2response failed for ${dwi}"
+
+  log "Running dwi2fod"
+  run_if_missing "${output_dir}/wmfod.mif" \
+    dwi2fod msmt_csd "$dwi" \
+      "${output_dir}/wm.txt" "${output_dir}/wmfod.mif" \
+      "${output_dir}/gm.txt" "${output_dir}/gmfod.mif" \
+      "${output_dir}/csf.txt" "${output_dir}/csffod.mif" \
+      -mask "$mask" -nthreads "$THREADS" -force
+  check_exit $? "dwi2fod failed for ${dwi}"
+
+  ### visual QC of wmfod ###
+  run_screen_grab_image "${output_dir}/wmfod.mif" \
+    "${SUB_ID}_wmfod_${REGRID_SIZE_FORMATTED}"
+
+  ### calculate FW ###
+  log "Computing total signal and free water fraction..."
+  run_if_missing "${output_dir}/total.mif" \
+    mrcalc "${output_dir}/wmfod.mif" "${output_dir}/gmfod.mif" -add \
+      "${output_dir}/csffod.mif" -add "${output_dir}/total.mif" -force
+
+  run_if_missing "${output_dir}/FW_fraction.mif" \
+    mrcalc "${output_dir}/csffod.mif" "${output_dir}/total.mif" -div \
+      "${output_dir}/FW_fraction.mif" -force
+
+  run_screen_grab_image "${output_dir}/FW_fraction.mif" \
+    "${SUB_ID}_FW_fraction_${REGRID_SIZE_FORMATTED}"
+}
+
 #-------------------------------------------------------------------------------
 ### CLEANUP FUNCTIONS ###
 #-------------------------------------------------------------------------------
 
 run_cleanup_scratch()
 {
-  ### delete SCRATCH_DIR_OUT super safely ###  
-  local parent=$(realpath "${SCRATCH_DIR}" 2>/dev/null)
-  local child=$(realpath "${SCRATCH_DIR_OUT}" 2>/dev/null)
-  local safe_to_delete=0
-
-  if [[ -z "$parent" || -z "$child" ]]; then
-    log "ERROR: Could not resolve SCRATCH_DIR or SCRATCH_DIR_OUT with realpath"
-    return
+  ### delete TMP_SCRATCH_DIR ###
+  if [[ -d "${TMP_SCRATCH_DIR}" ]]; then
+    log "Deleting scratch directory: ${TMP_SCRATCH_DIR}"
+    rm -rf "${TMP_SCRATCH_DIR}"
   fi
-  
-  if [[ "$parent" == "/" || "$child" == "/" ]]; then
-    log "ERROR: Unsafe path detected — one of the paths resolves to root (/)"
-  fi
-  
-  if [[ ! -d "$child" && ${DRY_RUN} -eq 0 ]]; then
-    log "Scratch directory does not exist: $child"
-  fi
-  
-  if [[ "$child" == "$parent"/* ]]; then
-    safe_to_delete=1
-  else
-    log "WARNING: ${child} is not a subdirectory of ${parent}, skipping deletion"
-  fi
-
-  ### log SCRATCH_DIR_OUT deletion for DRY_RUN and exit ###
-  if [[ "${DRY_RUN}" -eq 1 ]]; then
-    if [[ ${safe_to_delete} -eq 1 ]]; then
-      log "DRY_RUN: would delete scratch directory: ${child}"
-    else
-      log "DRY_RUN: would skip deletion of scratch directory: ${child}"
-    fi
-    return
-  fi
-
-  ### delete SCRATCH_DIR_OUT ###
-  if [[ ${safe_to_delete} -eq 1 ]]; then
-    log "Deleting scratch directory: ${child}"
-    rm -rf "${child}"
-  else
-    log "WARNING: Unsafe to delete scratch directory: ${child}"
-  fi
-
-  pushd "${BASE_OUT_DIR}" > /dev/null
 }
 
 pipe_cleanup()
 {
-  pushd "${OUT_BASE_DIR}" > /dev/null
+
+  ### delete TMP_SCRATCH_DIR ###
+  run_cleanup_scratch
+
+  pushd "${OUT_DIR_ROOT}" > /dev/null
 
   log "Cleaning up temporary files"
+  rm -f dwi_denoised_degibbs_eddy_mask.mif 
+  rm -f dwi_denoised_degibbs_eddy.mif  
+  rm -f dwi_denoised_degibbs.mif
+  rm -f dwi_denoised*_residuals.mif
+  rm -f dwi.mif
+  rm -f dwi_denoised.mif
+  
+  rm -f ${REGRID_SIZE_FORMATTED}_alps/tensor/tensor.nii.gz
+  rm -f ${REGRID_SIZE_FORMATTED}_tensor_fit/dwi.nii.gz
+  rm -f ${REGRID_SIZE_FORMATTED}_tensor_fit/dwi_grad_table
+  rm -f ${REGRID_SIZE_FORMATTED}_tensor_fit/dwi.bvecs
+  rm -f ${REGRID_SIZE_FORMATTED}_tensor_fit/dwi.bvals
 
-  ### delete MIF intermediates ###
-  rm -f dwi.mif 
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_FA_to_target.nii.gz
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_FA_to_target.mat
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_FA_to_target.log
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_FA_to_target_warp.nii.gz
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_to_target_tensor.nii.gz
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/dwi_FA_to_target_warp.msf
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/best.msf
+  rm -rf ${REGRID_SIZE_FORMATTED}_tbss/FA/slicesdir
+  rm -rf ${REGRID_SIZE_FORMATTED}_tbss/FA/tbss_logs
+  rm -rf ${REGRID_SIZE_FORMATTED}_tbss/origdata
+  rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/target.nii.gz
 
-  ### delete tensor conversion intermediates ###
-  #rm -f 1_1_1_tensor_fit/dwi.b* 1_1_1_tensor_fit/dwi_grad_table 1_1_1_tensor_fit/dwi.nii.gz 1_1_1_tensor_fit/dwi_mask.nii.gz
-
-  ### delete TBSS intermediates ###
-  #rm -rf 1_1_1_tbss/FA/tbss_logs 1_1_1_tbss/FA/slicesdir
-  #rm -f 1_1_1_tbss/FA/dwi_FA_to_target* 1_1_1_tbss/FA/target.nii.gz 1_1_1_tbss/tensor/dwi.nii.gz
-
-  ### delete ALPS tensor.nii.gz ###
-  #rm -f 1_1_1_alps/tensor/tensor.nii.gz
-
-  ### delete extra Eddy QC files ###
-  #rm -f eddyqc_dir/eddy_outlier_* eddyqc_dir/eddy_post_eddy_* eddyqc_dir/ref.txt eddyqc_dir/ref_list.png
+  rm -f ${REGRID_SIZE_FORMATTED}/eddyqc_dir/eddy_mask.nii
+  rm -f ${REGRID_SIZE_FORMATTED}/eddyqc_dir/eddy_outlier_free_data.nii.gz
 
   popd > /dev/null
 }
@@ -983,6 +997,7 @@ main()
   ### try to detect DTI files ###
   log "Auto-detecting DWI files..."
   detect_dti_files
+  detect_slice_orientation_from_json
   
   ### prep for preprocessing ###
   verify_minimum_required_inputs
@@ -1023,6 +1038,9 @@ main()
 
   ### run alps extraction ###
   pipe_alps_extract
+
+  ### run single shell free water fraction calculation ###
+  pipe_calculate_free_water_fraction
 
   ### end pipeline ###
   pipe_cleanup

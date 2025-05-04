@@ -1,19 +1,25 @@
 in_dir="${HOME}/tmp/dti_test_datasets/organized"
 out_dir="${HOME}/tmp/dti_test_datasets/derivatives/dti"
-scratch_dir="${HOME}/tmp/"
+scratch_dir="${HOME}/tmp/junk"
 alps_roi_dir="${HOME}/tmp/alps-rois"
 threads=3
 dry_run=0
 regrid_size="1,1,1" 
 
 # BEAM TEST
-sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
-sub_ids="sub-OND01BYC1006_ses-BL"
-sub_ids="C6-01-024_180713"
-sub_ids="sub-BCSA1F009_ses-FU"
+#sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004"
+#sub_ids="sub-OND01BYC1006_ses-BL"
+#sub_ids="C6-01-024_180713"
+#sub_ids="sub-BCSA1F009_ses-FU"
+
+
+#sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004 sub-OND01BYC1006_ses-BL sub-BCSA1F009_ses-FU"
+
+
+sub_ids="BEM01_BYC_5002 BEM01_BYC_5003 BEM01_BYC_5004 sub-OND01BYC1006_ses-BL C6-01-024_180713 sub-BCSA1F009_ses-FU"
 dwi_pfx="*"
 dry_run=0
-cleanup=0
+cleanup=1
 
 
 
@@ -22,7 +28,7 @@ for sub_id in ${sub_ids}; do
   ./dwi_preprocess \
     --in_dir "${in_dir}" \
     --out_dir "${out_dir}" \
-    --scratch_dir "${scratch_dir}" \
+    --scratch_dir_root "${scratch_dir}" \
     --alps_roi_dir "${alps_roi_dir}" \
     --threads "${threads}" \
     --dry_run "${dry_run}" \
