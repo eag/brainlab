@@ -969,8 +969,8 @@ pipe_cleanup()
   rm -rf ${REGRID_SIZE_FORMATTED}_tbss/origdata
   rm -f ${REGRID_SIZE_FORMATTED}_tbss/FA/target.nii.gz
 
-  rm -f ${REGRID_SIZE_FORMATTED}/eddyqc_dir/eddy_mask.nii
-  rm -f ${REGRID_SIZE_FORMATTED}/eddyqc_dir/eddy_outlier_free_data.nii.gz
+  rm -f eddyqc_dir/eddy_mask.nii
+  rm -f eddyqc_dir/eddy_outlier_free_data.nii.gz
 
   popd > /dev/null
 }
