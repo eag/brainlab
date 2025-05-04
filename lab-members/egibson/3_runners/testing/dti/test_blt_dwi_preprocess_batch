@@ -27,7 +27,7 @@ threads=8
 dry_run=0
 regrid_size="1,1,1" 
 dwi_pfx="*"
-dry_run=0
+dry_run=1
 cleanup=0
 
 BRAINLAB_DIR=${HOME}/work/code/brainlab
@@ -35,8 +35,9 @@ BRAINLAB_DIR=${HOME}/work/code/brainlab
 # ------------------------------------------------------------------------------
 ### JOB ###
 #-------------------------------------------------------------------------------
-
 IDX=${SLURM_ARRAY_TASK_ID}
+#-------------------------------------------------------------------------------
+
 sub_id=$(sed -n "${IDX}p" ${list_fn})
 
 ${BRAINLAB_DIR}/wrapper-scripts/bash/blt_dwi_preprocess \
