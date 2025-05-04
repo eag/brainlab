@@ -410,7 +410,7 @@ run_screen_grab_image()
  
   local gui_runner=""
   if [[ "${CC_CLUSTER}" == "cedar" || "${CC_CLUSTER}" == "narval" ]]; then
-    gui_runner="xvfb-run"
+    gui_runner="xvfb-run --auto-servernum --server-num=1000"
   fi
 
   local cmd="${gui_runner} mrview ${input}"
