@@ -8,11 +8,11 @@
 #SBATCH --time=00:60:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=8G
+#SBATCH --mem=24G
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=your_email@example.com
 #SBATCH --output=slurm_%x_%j.out
-#SBATCH --array=1-1%1
+#SBATCH --array=4-4%1
 
 # ------------------------------------------------------------------------------
 ### SETUP ###
@@ -27,7 +27,7 @@ threads=8
 dry_run=0
 regrid_size="1,1,1" 
 dwi_pfx="*"
-dry_run=1
+dry_run=0
 cleanup=0
 
 BRAINLAB_DIR=${HOME}/work/code/brainlab
