@@ -245,6 +245,7 @@ verify_minimum_required_inputs()
   fi
 }
 
+
 #-------------------------------------------------------------------------------
 ### AUTO-DETECTION FUNCTIONS ###
 #-------------------------------------------------------------------------------
@@ -930,7 +931,6 @@ pipe_calculate_free_water_fraction()
 
 run_cleanup_scratch()
 {
-  ### delete TMP_SCRATCH_DIR ###
   if [[ -d "${TMP_SCRATCH_DIR}" ]]; then
     log "Deleting scratch directory: ${TMP_SCRATCH_DIR}"
     rm -rf "${TMP_SCRATCH_DIR}"
@@ -941,6 +941,20 @@ pipe_cleanup()
 {
   run_cleanup_scratch
 
+  local n_pngs=$(ls "${QC_DIR}"/${SUB_ID}*.png 2>/dev/null | wc -l)
+  if [[ ${n_png} -ne 7 ]]; then
+    log "ERROR: ${n_png} PNG files found in ${QC_DIR}"
+    log "Expected 7 PNG files"
+    return
+  else
+    log "Cleaning up Intermediate files"
+  fi
+
+  if [[ ${CLEANUP} -eq 0 ]]; then
+    log "CLEANUP is set to 0, skipping cleanup"
+    return
+  fi
+ 
   pushd "${OUT_DIR_ROOT}" > /dev/null
 
   log "Cleaning up temporary files"
@@ -1038,11 +1052,7 @@ main()
   pipe_calculate_free_water_fraction
 
   ### end pipeline ###
-  if [[ -f "${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_free_water_fraction/FW_fraction.mif" ]]; then
-     pipe_cleanup
-  else
-     run_cleanup_scratch
-  fi
+  pipe_cleanup
   local end_time=$(date +%s)
   local elapsed_seconds=$((end_time - start_time))
   local elapsed_minutes=$((elapsed_seconds / 60))
