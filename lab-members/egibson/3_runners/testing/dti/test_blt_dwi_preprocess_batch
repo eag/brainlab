@@ -1,16 +1,16 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
 ### PROCESSING NOTES (CEDAR) ###
-#  - BEAM:   8 cores: ~01:40:00 @ 9 GB
-#  - ONDRI:  8 cores: ~01:09:00 @ 8 GB
-#  - LEDUCQ: 6 cores: ?
+#  - BEAM:   6 cores: ~01:40:00 @ 9 GB
+#  - ONDRI:  6 cores: ~01:09:00 @ 8 GB
+#  - LEDUCQ: 8 cores: ?
 #-------------------------------------------------------------------------------
 
 #SBATCH --account=def-mgoubran
-#SBATCH --time=12:00:00
+#SBATCH --time=11:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=10G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
 #SBATCH --output=slurm_%x_%A_%a.out
 #SBATCH --array=5-5%1
 
@@ -18,7 +18,7 @@
 ### SETUP ###
 #-------------------------------------------------------------------------------
 
-threads=1
+threads=8
 
 list_fn="${SCRATCH}/subject_list_1.txt"
 in_dir="${SCRATCH}/dti_test/organized"
