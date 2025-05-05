@@ -7,12 +7,13 @@
 #-------------------------------------------------------------------------------
 
 #SBATCH --account=def-mgoubran
-#SBATCH --time=07:00:00
+#SBATCH --time=04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=16G
 #SBATCH --output=slurm_%x_%A_%a.out
 #SBATCH --array=5-5%1
+#SBATCH --gpus-per-node=1
 
 # ------------------------------------------------------------------------------
 ### SETUP ###
@@ -27,6 +28,7 @@ threads=6
 dry_run=0
 regrid_size="1,1,1" 
 dwi_pfx="*"
+
 dry_run=0
 cleanup=0
 
