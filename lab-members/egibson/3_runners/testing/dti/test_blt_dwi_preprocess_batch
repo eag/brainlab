@@ -3,7 +3,8 @@
 ### PROCESSING NOTES (CEDAR) ###
 #  - BEAM:   6 cores: ~01:40:00 @ 9 GB
 #  - ONDRI:  6 cores: ~01:09:00 @ 8 GB
-#  - LEDUCQ: 8 cores: ?
+#  - LEDUCQ: 8 cores: ~08:30:00 @ 16GB
+#  - (with 50% CPU utilization due to single-threaded eddy/topup FSL calls)
 #-------------------------------------------------------------------------------
 
 #SBATCH --account=def-mgoubran
@@ -30,7 +31,6 @@ regrid_size="1,1,1"
 dwi_pfx="*"
 dry_run=0
 cleanup=0
-
 
 BRAINLAB_DIR=${HOME}/work/code/brainlab
 

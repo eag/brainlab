@@ -875,11 +875,11 @@ pipe_alps_extract()
   fi
 }
 
-pipe_calculate_free_water_fraction() 
+pipe_calculate_free_water() 
 {
   local dwi="${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}.mif"
   local mask="${OUT_DIR_ROOT}/dwi_denoised_degibbs_eddy_N4_${REGRID_SIZE_FORMATTED}_mask.nii.gz"
-  local output_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_free_water_fraction"
+  local output_dir="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_free_water"
   local bval="${OUT_DIR_ROOT}/${REGRID_SIZE_FORMATTED}_tensor_fit/dwi.bvals"
 
   n_shells=$(cat ${bval} | tr ' ' '\n' | awk '$1 > 50' | sort -n | uniq | wc -l)
@@ -941,7 +941,7 @@ pipe_cleanup()
 {
   run_cleanup_scratch
 
-  local n_pngs=$(ls "${QC_DIR}"/${SUB_ID}*.png 2>/dev/null | wc -l)
+  local n_png=$(ls "${QC_DIR}"/${SUB_ID}*.png 2>/dev/null | wc -l)
   if [[ ${n_png} -ne 7 ]]; then
     log "ERROR: ${n_png} PNG files found in ${QC_DIR}"
     log "Expected 7 PNG files"
@@ -1048,8 +1048,8 @@ main()
   ### run alps extraction ###
   pipe_alps_extract
 
-  ### run single shell free water fraction calculation ###
-  pipe_calculate_free_water_fraction
+  ### free water fraction (semi-quantitative for single-shell data) ###
+  pipe_calculate_free_water
 
   ### end pipeline ###
   pipe_cleanup
